@@ -1,0 +1,18 @@
+{
+  "name": "tanuki",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AU household lump-sum allocator — loan, offset, super, taxable",
+  "scripts": {
+    "dev": "pnpm --filter @tanuki/core build && pnpm -r --parallel --filter @tanuki/core --filter @tanuki/api --filter @tanuki/web dev",
+    "dev:api": "pnpm --filter @tanuki/api dev",
+    "dev:web": "pnpm --filter @tanuki/web dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.5.0"
+}
