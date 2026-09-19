@@ -10,7 +10,8 @@ export function defaultPerson(id: Person["id"], overrides: Partial<Person> = {})
       medicareLevy: 0.02,
       taxableIncome: 220_000,
       superBalance: 280_000,
-      concessionalUsedThisFy: 0,
+      employerSgThisFy: 0,
+      extraConcessionalThisFy: 0,
       unusedConcessionalCarryForward: 0,
       age: 38,
       ...overrides,
@@ -23,7 +24,8 @@ export function defaultPerson(id: Person["id"], overrides: Partial<Person> = {})
     medicareLevy: 0.02,
     taxableIncome: 90_000,
     superBalance: 160_000,
-    concessionalUsedThisFy: 0,
+    employerSgThisFy: 0,
+    extraConcessionalThisFy: 0,
     unusedConcessionalCarryForward: 0,
     age: 36,
     ...overrides,
@@ -37,6 +39,7 @@ export function defaultAssumptions(overrides: Partial<Assumptions> = {}): Assump
     horizonYears: 10,
     startDate: iso,
     inflationRate: 0.025,
+    incomeGrowthRate: 0,
     growthAsset: {
       label: "Growth (global + AU)",
       growthRate: 0.08,
@@ -62,8 +65,10 @@ export function defaultAssumptions(overrides: Partial<Assumptions> = {}): Assump
     nccBringForwardCap: FY_2026_27.nccBringForwardCap,
     tsbNccLimit: FY_2026_27.tsbNccLimit,
     tsbBringForward3y: FY_2026_27.tsbBringForward3y,
+    tsbBringForward2y: FY_2026_27.tsbBringForward2y,
     refundsToOffset: true,
     useNccBringForward: true,
+    sweepIdleOffset: true,
     ...overrides,
   };
 }
@@ -93,8 +98,8 @@ export function mergeHousehold(
   const p = patch as Partial<Household>;
   return {
     lumpSum: num(p.lumpSum, base.lumpSum),
-    you: { ...base.you, ...(p.you ?? {}), id: "you" },
-    spouse: { ...base.spouse, ...(p.spouse ?? {}), id: "spouse" },
+    you: mergePerson(base.you, p.you, "you"),
+    spouse: mergePerson(base.spouse, p.spouse, "spouse"),
     loan: { ...base.loan, ...(p.loan ?? {}) },
     assumptions: {
       ...base.assumptions,
@@ -109,6 +114,32 @@ export function mergeHousehold(
       },
     },
   };
+}
+
+function mergePerson(
+  base: Person,
+  patch: Partial<Person> | undefined,
+  id: Person["id"],
+): Person {
+  const p = (patch ?? {}) as Partial<Person> & {
+    concessionalUsedThisFy?: number;
+  };
+  const hasSplit =
+    p.employerSgThisFy != null || p.extraConcessionalThisFy != null;
+  const next: Person = {
+    ...base,
+    ...p,
+    id,
+    employerSgThisFy: num(p.employerSgThisFy, base.employerSgThisFy),
+    extraConcessionalThisFy: num(
+      p.extraConcessionalThisFy,
+      hasSplit
+        ? base.extraConcessionalThisFy
+        : num(p.concessionalUsedThisFy, base.extraConcessionalThisFy),
+    ),
+  };
+  delete (next as { concessionalUsedThisFy?: number }).concessionalUsedThisFy;
+  return next;
 }
 
 function num(v: unknown, fallback: number): number {

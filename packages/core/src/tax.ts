@@ -4,6 +4,18 @@ export const COMPANY_TAX_RATE = 0.3;
 export const POST_2027_CGT_MIN_RATE = 0.3;
 export const DEFAULT_CGT_INFLATION_RATE = 0.025;
 
+/** Resident PIT thresholds for FY2026-27. Last rate applies above 190k. */
+export const RESIDENT_BRACKETS_FY2026_27: readonly {
+  upTo: number;
+  rate: number;
+}[] = [
+  { upTo: 18_200, rate: 0 },
+  { upTo: 45_000, rate: 0.15 },
+  { upTo: 135_000, rate: 0.3 },
+  { upTo: 190_000, rate: 0.37 },
+  { upTo: Number.POSITIVE_INFINITY, rate: 0.45 },
+];
+
 export function combinedMarginalRate(person: {
   marginalRate: number;
   medicareLevy: number;
@@ -11,11 +23,52 @@ export function combinedMarginalRate(person: {
   return person.marginalRate + person.medicareLevy;
 }
 
-export function post2027CgtRateOnGain(person: {
-  marginalRate: number;
+export function lastDollarPit(taxableIncome: number): number {
+  const y = Math.max(0, taxableIncome);
+  for (const b of RESIDENT_BRACKETS_FY2026_27) {
+    if (y <= b.upTo) return b.rate;
+  }
+  return 0.45;
+}
+
+export function lastDollarCombined(person: {
+  taxableIncome: number;
   medicareLevy: number;
 }): number {
-  return Math.max(combinedMarginalRate(person), POST_2027_CGT_MIN_RATE);
+  return lastDollarPit(person.taxableIncome) + Math.max(0, person.medicareLevy);
+}
+
+export function bracketTax(income: number): number {
+  if (income <= 0) return 0;
+  let tax = 0;
+  let prev = 0;
+  for (const b of RESIDENT_BRACKETS_FY2026_27) {
+    const slice = Math.min(income, b.upTo) - prev;
+    if (slice > 0) tax += slice * b.rate;
+    prev = b.upTo;
+    if (income <= b.upTo) break;
+  }
+  return tax;
+}
+
+export function incomeTax(taxableIncome: number, medicareLevy: number): number {
+  const y = Math.max(0, taxableIncome);
+  return bracketTax(y) + y * Math.max(0, medicareLevy);
+}
+
+export function taxDelta(
+  base: number,
+  extra: number,
+  medicareLevy: number,
+): number {
+  return incomeTax(base + extra, medicareLevy) - incomeTax(base, medicareLevy);
+}
+
+export function post2027CgtRateOnGain(person: {
+  taxableIncome: number;
+  medicareLevy: number;
+}): number {
+  return Math.max(lastDollarCombined(person), POST_2027_CGT_MIN_RATE);
 }
 
 export function monthlyRate(annual: number): number {
@@ -56,13 +109,12 @@ export function frankingCredits(cashAud: number, frankingPercent: number): numbe
 export function dividendTax(
   cashAud: number,
   frankingPercent: number,
-  person: Pick<Person, "marginalRate" | "medicareLevy">,
+  person: Pick<Person, "taxableIncome" | "medicareLevy">,
 ): number {
   if (cashAud <= 0) return 0;
   const credits = frankingCredits(cashAud, frankingPercent);
   const assessable = cashAud + credits;
-  const gross = assessable * combinedMarginalRate(person);
-  return gross - credits;
+  return taxDelta(person.taxableIncome, assessable, person.medicareLevy) - credits;
 }
 
 export type HybridCgtInput = {
@@ -74,7 +126,7 @@ export type HybridCgtInput = {
   /** Portfolio value on 1 Jul 2027; if omitted, interpolate by time */
   valueAtCutover?: number;
   inflationRate: number;
-  person: Pick<Person, "marginalRate" | "medicareLevy">;
+  person: Pick<Person, "taxableIncome" | "medicareLevy">;
 };
 
 export type HybridCgtResult = {
@@ -95,14 +147,17 @@ export type HybridCgtResult = {
  */
 export function estimateHybridCgt(input: HybridCgtInput): HybridCgtResult {
   const notes: string[] = [];
-  const mtr = combinedMarginalRate(input.person);
+  const med = input.person.medicareLevy;
+  const base = input.person.taxableIncome;
   const gainNominal = input.proceeds - input.cost;
+  const longTerm =
+    daysBetweenIso(input.acquiredDate, input.disposedDate) >= 365;
   const legacyTax =
     gainNominal <= 0
       ? 0
-      : daysBetweenIso(input.acquiredDate, input.disposedDate) >= 365
-        ? gainNominal * 0.5 * mtr
-        : gainNominal * mtr;
+      : longTerm
+        ? taxDelta(base, gainNominal * 0.5, med)
+        : taxDelta(base, gainNominal, med);
 
   if (input.proceeds <= 0) {
     return { tax: 0, taxIfLegacyDiscount: 0, preGain: 0, postGain: 0, notes };
@@ -115,7 +170,12 @@ export function estimateHybridCgt(input: HybridCgtInput): HybridCgtResult {
         ? "Sold before 1 Jul 2027. 50% CGT discount."
         : "Sold before 1 Jul 2027 and held under 12 months. Full marginal rate.",
     );
-    const tax = gainNominal <= 0 ? 0 : longTerm ? gainNominal * 0.5 * mtr : gainNominal * mtr;
+    const tax =
+      gainNominal <= 0
+        ? 0
+        : longTerm
+          ? taxDelta(base, gainNominal * 0.5, med)
+          : taxDelta(base, gainNominal, med);
     return {
       tax: round2(tax),
       taxIfLegacyDiscount: round2(legacyTax),
@@ -129,12 +189,15 @@ export function estimateHybridCgt(input: HybridCgtInput): HybridCgtResult {
     const years = daysBetweenIso(input.acquiredDate, input.disposedDate) / 365.25;
     const indexed = input.cost * Math.pow(1 + input.inflationRate, Math.max(0, years));
     const postGain = input.proceeds - indexed;
-    const rate = post2027CgtRateOnGain(input.person);
+    const taxable = Math.max(0, postGain);
+    const scaleTax = taxDelta(base, taxable, med);
+    const floor = taxable * POST_2027_CGT_MIN_RATE;
+    const tax = Math.max(scaleTax, floor);
     notes.push(
-      `Acquired after 1 Jul 2027. CPI indexation, ${(rate * 100).toFixed(0)}% on the real gain, the higher of your rate and 30%.`,
+      "Acquired after 1 Jul 2027. CPI indexation. Taxed on the real gain at the FY2026-27 scale, with a 30% minimum.",
     );
     return {
-      tax: round2(Math.max(0, postGain) * rate),
+      tax: round2(tax),
       taxIfLegacyDiscount: round2(legacyTax),
       preGain: 0,
       postGain: round2(postGain),
@@ -153,12 +216,9 @@ export function estimateHybridCgt(input: HybridCgtInput): HybridCgtResult {
   const preGain = cutoverValue - input.cost;
   const held12AtCutover =
     daysBetweenIso(input.acquiredDate, CGT_REGIME_CUTOVER_ISO) >= 365;
-  const preTax =
-    preGain <= 0
-      ? 0
-      : held12AtCutover
-        ? preGain * 0.5 * mtr
-        : preGain * mtr;
+  const preTaxable =
+    preGain <= 0 ? 0 : held12AtCutover ? preGain * 0.5 : preGain;
+  const preTax = preTaxable <= 0 ? 0 : taxDelta(base, preTaxable, med);
   notes.push(
     held12AtCutover
       ? "Gain before 1 Jul 2027 keeps the 50% discount."
@@ -170,10 +230,11 @@ export function estimateHybridCgt(input: HybridCgtInput): HybridCgtResult {
   const indexedPost =
     cutoverValue * Math.pow(1 + input.inflationRate, Math.max(0, yearsAfter));
   const postGain = input.proceeds - indexedPost;
-  const postRate = post2027CgtRateOnGain(input.person);
-  const postTax = Math.max(0, postGain) * postRate;
+  const postTaxable = Math.max(0, postGain);
+  const postScale = taxDelta(base + preTaxable, postTaxable, med);
+  const postTax = Math.max(postScale, postTaxable * POST_2027_CGT_MIN_RATE);
   notes.push(
-    `Gain after 1 Jul 2027. Cost resets to value at cutover, then CPI-indexed. ${(postRate * 100).toFixed(0)}% on the real gain.`,
+    "Gain after 1 Jul 2027. Cost resets to value at cutover, then CPI-indexed. Taxed on the real gain at the scale, with a 30% minimum.",
   );
 
   return {

@@ -81,7 +81,7 @@ export function buildPresets(h: Household): ScenarioDef[] {
       id: "recycle-growth",
       label: "Debt recycle, growth",
       summary:
-        "Two steps. Park the lump in the offset so the home loan costs less. Then borrow that same amount as a new investment loan and buy growth shares.\n\nYou still have debt, but some of the interest can come off your tax. If the shares grow more than the loan costs after tax, you win. If they don't, you don't.\n\nThis is the spicy option. Keep a clean paper trail.",
+        "Two steps. Pay the lump onto the home loan so that amount is available to redraw. Then draw it as an investment split and buy growth shares in your name.\n\nYou still have debt, but some of the interest can come off your tax. If the shares grow more than the loan costs after tax, you win. If they don't, you don't.\n\nThis is the spicy option. Keep a clean paper trail. You cannot recycle from an offset.",
       group: "recycle",
       allocation: alloc({ debt_recycle_you_growth: S }),
     },
@@ -89,7 +89,7 @@ export function buildPresets(h: Household): ScenarioDef[] {
       id: "recycle-income",
       label: "Debt recycle, income",
       summary:
-        "Same two-step as debt recycle. Offset the lump, borrow it back, buy shares. This time the shares pay dividends.\n\nThe loan interest can come off your tax, and the dividends plus company tax credits show up each year to help pay it.\n\nStill a loan. Still a problem if the shares have a bad run.",
+        "Same two-step as debt recycle. Pay the lump onto the home loan, redraw it as an investment split, buy shares. This time the shares pay dividends.\n\nThe loan interest can come off your tax, and the dividends plus company tax credits show up each year to help pay it.\n\nStill a loan. Still a problem if the shares have a bad run.",
       group: "recycle",
       allocation: alloc({ debt_recycle_you_income: S }),
     },
@@ -201,7 +201,7 @@ export function buildPresets(h: Household): ScenarioDef[] {
       id: "cc-you-recycle",
       label: "Tax-cut into your super, leftover recycled",
       summary:
-        `This is two piles, not one.\n\nAbout $${Math.round(rec).toLocaleString("en-AU")} goes into your super as a tax-cut contribution. You get a tax refund at your high rate. Super takes 15% on the way in. That bit is locked until retirement.\n\nWhatever is left of the lump is debt-recycled. It sits in the offset, you borrow the same amount as an investment loan in your name, and you buy growth shares in your name.\n\nThe split below has the exact dollars.`,
+        `This is two piles, not one.\n\nAbout $${Math.round(rec).toLocaleString("en-AU")} goes into your super as a tax-cut contribution. You get a tax refund at your high rate. Super takes 15% on the way in. That bit is locked until retirement.\n\nWhatever is left of the lump is debt-recycled. It pays down the home loan, you redraw the same amount as an investment split in your name, and you buy growth shares in your name.\n\nThe split below has the exact dollars.`,
       group: "mix",
       allocation: alloc({
         super_cc_you: rec,

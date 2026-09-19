@@ -23,9 +23,14 @@ export function numInput(n: number): string {
 }
 
 export function parseNum(raw: string): number {
-  const t = raw.replace(/[$,\s]/g, "");
+  return parseNumLoose(raw) ?? 0;
+}
+
+export function parseNumLoose(raw: string): number | null {
+  const t = raw.replace(/[$,\s]/g, "").trim();
+  if (t === "" || t === "-" || t === "." || t === "-.") return null;
   const n = Number(t);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? n : null;
 }
 
 export function parsePct(raw: string): number {

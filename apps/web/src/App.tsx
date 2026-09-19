@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  Area,
+  AreaChart,
   CartesianGrid,
   Legend,
   Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -23,7 +24,14 @@ import {
   type RunReport,
   type ScenarioResult,
 } from "./api";
-import { money, parseNum, pct } from "./format";
+import {
+  REST_BUCKETS,
+  lastDollarPit,
+  stackAllocation,
+  taxDelta,
+  type SuperFill,
+} from "@tanuki/core";
+import { money, parseNum, parseNumLoose, pct } from "./format";
 
 const MIX_BUCKETS: { id: string; label: string; tip: string }[] = [
   {
@@ -59,12 +67,12 @@ const MIX_BUCKETS: { id: string; label: string; tip: string }[] = [
   {
     id: "debt_recycle_you_growth",
     label: "Debt recycle, growth",
-    tip: "Park it in the offset, borrow it back, buy growth shares. Some of the interest comes off your tax.",
+    tip: "Pay it onto the home loan, redraw as an investment split, buy growth shares. Some of the interest comes off your tax. You cannot recycle from an offset.",
   },
   {
     id: "debt_recycle_you_income",
     label: "Debt recycle, income",
-    tip: "Same borrow-to-invest move, but the shares pay dividends that can help cover the loan.",
+    tip: "Same pay-down-then-redraw move, but the shares pay dividends that can help cover the loan.",
   },
   {
     id: "super_cc_you",
@@ -249,10 +257,11 @@ export default function App() {
                       key={id}
                       type="button"
                       className={`${id === selectedId ? "on" : ""} ${i === 0 ? "best" : ""}`}
+                      title={r.label}
+                      aria-label={`${i + 1}, ${r.label}`}
                       onClick={() => setSelectedId(id)}
                     >
-                      <span className="n">{i + 1}</span>
-                      {r.label}
+                      {i + 1}
                     </button>
                   );
                 })}
@@ -285,7 +294,7 @@ export default function App() {
       </div>
 
       <Mixer
-        lump={household.lumpSum}
+        household={household}
         mix={mix}
         mixSum={mixSum}
         onChange={setMix}
@@ -370,8 +379,70 @@ function Field({
   );
 }
 
+function NumInput({
+  value,
+  onChange,
+  digits,
+  id,
+  blankZero,
+  onClear,
+}: {
+  value: number | undefined;
+  onChange: (n: number) => void;
+  digits?: number;
+  id?: string;
+  blankZero?: boolean;
+  onClear?: () => void;
+}) {
+  const [raw, setRaw] = useState<string | null>(null);
+  const shown =
+    raw ??
+    (value == null || !Number.isFinite(value) || (blankZero && value === 0)
+      ? ""
+      : digits != null
+        ? value.toFixed(digits)
+        : String(value));
+
+  return (
+    <input
+      id={id}
+      inputMode="decimal"
+      value={shown}
+      placeholder={blankZero ? "0" : undefined}
+      onFocus={() =>
+        setRaw(value == null || !Number.isFinite(value) ? "" : String(value))
+      }
+      onChange={(e) => {
+        const next = e.target.value;
+        setRaw(next);
+        const n = parseNumLoose(next);
+        if (n != null) onChange(n);
+      }}
+      onBlur={() => {
+        if (raw != null && raw.trim() === "") {
+          if (onClear) onClear();
+          else onChange(0);
+        } else if (raw != null) {
+          const n = parseNum(raw);
+          onChange(n);
+        }
+        setRaw(null);
+      }}
+    />
+  );
+}
+
 function sameIds(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
+function ccRoom(person: Person, cap: number): number {
+  const committed =
+    Math.max(0, person.employerSgThisFy) +
+    Math.max(0, person.extraConcessionalThisFy);
+  const fromCap =
+    cap + Math.max(0, person.unusedConcessionalCarryForward) - committed;
+  return Math.max(0, Math.min(fromCap, Math.max(0, person.taxableIncome)));
 }
 
 function mixWithLeftover(mix: Allocation, lump: number): Allocation | undefined {
@@ -420,11 +491,10 @@ function HouseholdForm({
             Lump to place
           </Tip>
         </label>
-        <input
+        <NumInput
           id="lump"
-          inputMode="decimal"
           value={h.lumpSum}
-          onChange={(e) => set({ lumpSum: parseNum(e.target.value) })}
+          onChange={(n) => set({ lumpSum: n })}
         />
       </div>
       <div className="grid-2">
@@ -432,9 +502,9 @@ function HouseholdForm({
           label="Horizon (years)"
           tip="How far the comparison runs. Every scenario is measured this many years from the start date."
         >
-          <input
+          <NumInput
             value={h.assumptions.horizonYears}
-            onChange={(e) => setA({ horizonYears: parseNum(e.target.value) })}
+            onChange={(n) => setA({ horizonYears: n })}
           />
         </Field>
         <Field
@@ -447,21 +517,39 @@ function HouseholdForm({
             onChange={(e) => setA({ startDate: e.target.value })}
           />
         </Field>
+        <Field
+          label="Income growth % p.a."
+          tip="Grows taxable income each year for the tax scale. Employer SG and extra concessional grow at the same rate and keep going into super, after 15%."
+        >
+          <NumInput
+            value={(h.assumptions.incomeGrowthRate ?? 0) * 100}
+            digits={1}
+            onChange={(n) => setA({ incomeGrowthRate: n / 100 })}
+          />
+        </Field>
       </div>
 
       <div className="section">
         <h3>
-          <Tip text="Your tax settings. Combined is marginal plus Medicare. That's the rate on extra income, deductions, and most CGT.">
-            You, {pct(h.you.marginalRate + h.you.medicareLevy, 0)} combined
+          <Tip text="Last-dollar rate is PIT on the top slice of taxable income plus Medicare. Extra income and deductions use the FY2026-27 scale, not a flat top rate. Tax-cut room is the concessional cap minus employer SG and extra concessional already going in this year.">
+            You, {pct(lastDollarPit(h.you.taxableIncome) + h.you.medicareLevy, 0)}{" "}
+            last dollar.{" "}
+            {money(ccRoom(h.you, h.assumptions.concessionalCap))} tax-cut room
           </Tip>
         </h3>
         <PersonFields person={h.you} onChange={setYou} />
       </div>
       <div className="section">
         <h3>
-          <Tip text="Your spouse's tax settings. Holding taxable assets here uses their lower combined rate on dividends and CGT.">
-            Spouse, {pct(h.spouse.marginalRate + h.spouse.medicareLevy, 0)}{" "}
-            combined
+          <Tip text="Last-dollar rate is PIT on the top slice of their taxable income plus Medicare. Extra income and deductions use the FY2026-27 scale. Tax-cut room is the concessional cap minus employer SG and extra concessional already going in this year.">
+            Spouse,{" "}
+            {pct(
+              lastDollarPit(h.spouse.taxableIncome) + h.spouse.medicareLevy,
+              0,
+            )}{" "}
+            last dollar.{" "}
+            {money(ccRoom(h.spouse, h.assumptions.concessionalCap))} tax-cut
+            room
           </Tip>
         </h3>
         <PersonFields person={h.spouse} onChange={setSpouse} />
@@ -478,40 +566,46 @@ function HouseholdForm({
             label="Balance"
             tip="What you still owe on the home loan today, before placing the lump."
           >
-            <input
+            <NumInput
               value={h.loan.balance}
-              onChange={(e) => setLoan({ balance: parseNum(e.target.value) })}
+              onChange={(n) => setLoan({ balance: n })}
             />
           </Field>
           <Field
             label="Offset"
             tip="Cash already in the offset account. It reduces interest as if the loan were smaller, and stays spendable."
           >
-            <input
+            <NumInput
               value={h.loan.offset}
-              onChange={(e) => setLoan({ offset: parseNum(e.target.value) })}
+              onChange={(n) => setLoan({ offset: n })}
+            />
+          </Field>
+          <Field
+            label="Of which, not yours"
+            tip="Money sitting in the offset that isn't yours to keep — a family loan you have to repay, for example. It still cuts home-loan interest while it sits there, but it's left out of net wealth and never auto-invested."
+          >
+            <NumInput
+              value={h.loan.restrictedOffset ?? 0}
+              onChange={(n) => setLoan({ restrictedOffset: n })}
             />
           </Field>
           <Field
             label="Rate (%)"
             tip="Home-loan interest rate. A dollar in the offset saves this rate, and that saving isn't taxed."
           >
-            <input
-              value={(h.loan.annualRate * 100).toFixed(2)}
-              onChange={(e) =>
-                setLoan({ annualRate: parseNum(e.target.value) / 100 })
-              }
+            <NumInput
+              value={h.loan.annualRate * 100}
+              digits={2}
+              onChange={(n) => setLoan({ annualRate: n / 100 })}
             />
           </Field>
           <Field
             label="Years left"
             tip="Years left on the loan. Used to size the principal-and-interest payment from salary each month."
           >
-            <input
+            <NumInput
               value={h.loan.remainingYears}
-              onChange={(e) =>
-                setLoan({ remainingYears: parseNum(e.target.value) })
-              }
+              onChange={(n) => setLoan({ remainingYears: n })}
             />
           </Field>
         </div>
@@ -527,6 +621,24 @@ function HouseholdForm({
         </label>
       </div>
 
+      <div className="section">
+        <h3>
+          <Tip text="Once offset is bigger than the home loan, extra dollars save no more interest. The split is not offset. This buys growth shares in your spouse's name with that idle cash. No extra loan.">
+            Idle offset
+          </Tip>
+        </h3>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={h.assumptions.sweepIdleOffset !== false}
+            onChange={(e) => setA({ sweepIdleOffset: e.target.checked })}
+          />
+          <Tip text="Each month, offset above the home balance buys growth shares in your spouse's name. Unlevered. You can turn this off to leave the cash in the offset.">
+            Invest offset above the home loan
+          </Tip>
+        </label>
+      </div>
+
       <details className="assumptions">
         <summary>
           <Tip text="These are not forecasts. They are the return and inflation knobs the ranking uses so you can see which strategy wins if the world looks like this.">
@@ -538,84 +650,75 @@ function HouseholdForm({
             label="Growth, capital % p.a."
             tip="Assumed share-price growth for the growth shares, per year, before fees. Not a forecast."
           >
-            <input
-              value={(h.assumptions.growthAsset.growthRate * 100).toFixed(1)}
-              onChange={(e) =>
-                setGrowth({ growthRate: parseNum(e.target.value) / 100 })
-              }
+            <NumInput
+              value={h.assumptions.growthAsset.growthRate * 100}
+              digits={1}
+              onChange={(n) => setGrowth({ growthRate: n / 100 })}
             />
           </Field>
           <Field
             label="Growth, yield % p.a."
             tip="Assumed dividends from the growth shares. Taxed each year even if reinvested."
           >
-            <input
-              value={(h.assumptions.growthAsset.yieldRate * 100).toFixed(1)}
-              onChange={(e) =>
-                setGrowth({ yieldRate: parseNum(e.target.value) / 100 })
-              }
+            <NumInput
+              value={h.assumptions.growthAsset.yieldRate * 100}
+              digits={1}
+              onChange={(n) => setGrowth({ yieldRate: n / 100 })}
             />
           </Field>
           <Field
             label="Income, capital % p.a."
             tip="Assumed share-price growth of the high-yield shares. Usually lower than the growth shares."
           >
-            <input
-              value={(h.assumptions.incomeAsset.growthRate * 100).toFixed(1)}
-              onChange={(e) =>
-                setIncome({ growthRate: parseNum(e.target.value) / 100 })
-              }
+            <NumInput
+              value={h.assumptions.incomeAsset.growthRate * 100}
+              digits={1}
+              onChange={(n) => setIncome({ growthRate: n / 100 })}
             />
           </Field>
           <Field
             label="Income, yield % p.a."
             tip="Assumed dividends from the high-yield shares. Taxed at the holder's rate. Franking is applied."
           >
-            <input
-              value={(h.assumptions.incomeAsset.yieldRate * 100).toFixed(1)}
-              onChange={(e) =>
-                setIncome({ yieldRate: parseNum(e.target.value) / 100 })
-              }
+            <NumInput
+              value={h.assumptions.incomeAsset.yieldRate * 100}
+              digits={1}
+              onChange={(n) => setIncome({ yieldRate: n / 100 })}
             />
           </Field>
           <Field
             label="Super return % p.a., before 15%"
             tip="Assumed super return before the fund's 15% earnings tax. The model then takes 15% off this whole return."
           >
-            <input
-              value={(h.assumptions.superReturnRate * 100).toFixed(1)}
-              onChange={(e) =>
-                setA({ superReturnRate: parseNum(e.target.value) / 100 })
-              }
+            <NumInput
+              value={h.assumptions.superReturnRate * 100}
+              digits={1}
+              onChange={(n) => setA({ superReturnRate: n / 100 })}
             />
           </Field>
           <Field
             label="CPI for CGT indexation %"
             tip="Inflation used to lift the cost base of taxable shares after 1 Jul 2027. You are only taxed on gains above this."
           >
-            <input
-              value={(h.assumptions.inflationRate * 100).toFixed(1)}
-              onChange={(e) =>
-                setA({ inflationRate: parseNum(e.target.value) / 100 })
-              }
+            <NumInput
+              value={h.assumptions.inflationRate * 100}
+              digits={1}
+              onChange={(n) => setA({ inflationRate: n / 100 })}
             />
           </Field>
           <Field
             label="Investment-loan rate %"
             tip="Interest rate on a debt-recycled investment loan. Leave blank to use the home-loan rate."
           >
-            <input
+            <NumInput
               value={
                 h.assumptions.investmentLoanRate == null
-                  ? ""
-                  : (h.assumptions.investmentLoanRate * 100).toFixed(2)
+                  ? undefined
+                  : h.assumptions.investmentLoanRate * 100
               }
-              onChange={(e) => {
-                const raw = e.target.value.trim();
-                setA({
-                  investmentLoanRate: raw === "" ? undefined : parseNum(raw) / 100,
-                });
-              }}
+              digits={2}
+              onChange={(n) => setA({ investmentLoanRate: n / 100 })}
+              onClear={() => setA({ investmentLoanRate: undefined })}
             />
           </Field>
         </div>
@@ -662,75 +765,77 @@ function PersonFields({
     <div className="grid-2">
       <Field
         label="Taxable income"
-        tip="This year's taxable income. Caps how large a deductible super contribution can be, and whether Division 293 extra tax applies."
+        tip="This year's taxable income. Extra income and deductions walk the FY2026-27 brackets from this number. Also caps a deductible super contribution, and Division 293."
       >
-        <input
+        <NumInput
           value={person.taxableIncome}
-          onChange={(e) => onChange({ taxableIncome: parseNum(e.target.value) })}
+          onChange={(n) =>
+            onChange({ taxableIncome: n, marginalRate: lastDollarPit(n) })
+          }
         />
       </Field>
       <Field
-        label="Marginal rate %"
-        tip="Tax rate on the next dollar of income, before Medicare. 45 means the top bracket."
+        label="Last-dollar PIT %"
+        tip="From the FY2026-27 scale on taxable income. Not a flat rate. Medicare is added on top."
       >
         <input
-          value={(person.marginalRate * 100).toFixed(0)}
-          onChange={(e) =>
-            onChange({ marginalRate: parseNum(e.target.value) / 100 })
-          }
+          readOnly
+          value={(lastDollarPit(person.taxableIncome) * 100).toFixed(0)}
         />
       </Field>
       <Field
         label="Medicare %"
         tip="Medicare levy, usually 2. Added to the marginal rate for the combined rate used on extra income and CGT."
       >
-        <input
-          value={(person.medicareLevy * 100).toFixed(0)}
-          onChange={(e) =>
-            onChange({ medicareLevy: parseNum(e.target.value) / 100 })
-          }
+        <NumInput
+          value={person.medicareLevy * 100}
+          digits={0}
+          onChange={(n) => onChange({ medicareLevy: n / 100 })}
         />
       </Field>
       <Field
         label="Super balance"
         tip="Total super last 30 June. At or above the transfer-balance-linked limit, after-tax contributions are $0."
       >
-        <input
+        <NumInput
           value={person.superBalance}
-          onChange={(e) => onChange({ superBalance: parseNum(e.target.value) })}
+          onChange={(n) => onChange({ superBalance: n })}
         />
       </Field>
       <Field
-        label="CC already this FY"
-        tip="Concessional contributions already made this year. Employer SG, salary sacrifice, or deductible personal contributions."
+        label="Employer SG this FY"
+        tip="Full year of Super Guarantee the employer will pay, even if none of the lump goes into super. Sole traders usually leave this at 0."
       >
-        <input
-          value={person.concessionalUsedThisFy}
-          onChange={(e) =>
-            onChange({ concessionalUsedThisFy: parseNum(e.target.value) })
-          }
+        <NumInput
+          value={person.employerSgThisFy}
+          onChange={(n) => onChange({ employerSgThisFy: n })}
+        />
+      </Field>
+      <Field
+        label="Extra concessional this FY"
+        tip="Salary sacrifice or personal deductible contributions already happening this year, not the lump. A sole trader puts what they already pay themselves here."
+      >
+        <NumInput
+          value={person.extraConcessionalThisFy}
+          onChange={(n) => onChange({ extraConcessionalThisFy: n })}
         />
       </Field>
       <Field
         label="Unused CC carry-forward"
         tip="Unused concessional cap from earlier years you can still use. Added to this year's remaining cap."
       >
-        <input
+        <NumInput
           value={person.unusedConcessionalCarryForward}
-          onChange={(e) =>
-            onChange({
-              unusedConcessionalCarryForward: parseNum(e.target.value),
-            })
-          }
+          onChange={(n) => onChange({ unusedConcessionalCarryForward: n })}
         />
       </Field>
       <Field
         label="Age"
         tip="Used for contribution age limits. After-tax contributions stop at 75 in this model."
       >
-        <input
+        <NumInput
           value={person.age}
-          onChange={(e) => onChange({ age: parseNum(e.target.value) })}
+          onChange={(n) => onChange({ age: n })}
         />
       </Field>
     </div>
@@ -817,22 +922,24 @@ function ChartPanel({
   const chart = useMemo(() => {
     const years = selected.years;
     const baseYears = baseline?.years ?? [];
-    return years.map((y) => ({
-      year: y.year,
-      [selected.label]: y.netWealth,
-      ...(baseline
-        ? {
-            [baseline.label]:
-              baseYears.find((b) => b.year === y.year)?.netWealth ?? null,
-          }
-        : {}),
-    }));
+    return years.map((y) => {
+      return {
+        year: y.year,
+        super: y.superTotal,
+        investments: y.taxableTotal,
+        offsetAndCash: Math.max(0, y.offsetAndCash),
+        debt: -Math.max(0, y.debt),
+        netWealth: y.netWealth,
+        offsetBaseline:
+          baseYears.find((b) => b.year === y.year)?.netWealth ?? null,
+      };
+    });
   }, [selected, baseline]);
 
   return (
     <div className="chart-wrap">
       <ResponsiveContainer>
-        <LineChart data={chart} margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
+        <AreaChart data={chart} margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
           <CartesianGrid stroke="#b7c2bc" strokeDasharray="3 6" />
           <XAxis dataKey="year" tick={{ fill: "#5c6b66", fontSize: 12 }} />
           <YAxis
@@ -849,25 +956,68 @@ function ChartPanel({
             labelFormatter={(y) => `Year ${y}`}
           />
           <Legend />
-          <Line
-            type="monotone"
-            dataKey={selected.label}
+          <Area
+            type="linear"
+            stackId="assets"
+            dataKey="super"
+            name="Super"
             stroke="#243868"
+            fill="#243868"
+            fillOpacity={0.88}
+            isAnimationActive={false}
+          />
+          <Area
+            type="linear"
+            stackId="assets"
+            dataKey="investments"
+            name="Investments"
+            stroke="#b8892d"
+            fill="#b8892d"
+            fillOpacity={0.88}
+            isAnimationActive={false}
+          />
+          <Area
+            type="linear"
+            stackId="assets"
+            dataKey="offsetAndCash"
+            name="Offset & cash"
+            stroke="#1f6b4a"
+            fill="#1f6b4a"
+            fillOpacity={0.8}
+            isAnimationActive={false}
+          />
+          <Area
+            type="linear"
+            stackId="debt"
+            dataKey="debt"
+            name="Debt (loans + owed cash)"
+            stroke="#a13d2f"
+            fill="#a13d2f"
+            fillOpacity={0.55}
+            isAnimationActive={false}
+          />
+          <Line
+            type="linear"
+            dataKey="netWealth"
+            name="Net wealth"
+            stroke="#141816"
             strokeWidth={2}
             dot={false}
             isAnimationActive={false}
           />
           {baseline && baseline.id !== selected.id ? (
             <Line
-              type="monotone"
-              dataKey={baseline.label}
-              stroke="#b8892d"
+              type="linear"
+              dataKey="offsetBaseline"
+              name={baseline.label}
+              stroke="#5c6b66"
               strokeWidth={1.5}
+              strokeDasharray="4 4"
               dot={false}
               isAnimationActive={false}
             />
           ) : null}
-        </LineChart>
+        </AreaChart>
       </ResponsiveContainer>
     </div>
   );
@@ -916,14 +1066,14 @@ const LUMP_BUCKETS: Record<
   debt_recycle_you_growth: {
     who: "You",
     chip: "recycle → your growth shares",
-    what: "into the offset, then borrowed back to buy growth shares in your name",
-    tip: "The same dollars sit in the offset, become an investment loan in your name, and buy growth shares in your name.",
+    what: "onto the home loan, then redrawn to buy growth shares in your name",
+    tip: "Pays down the home loan, then that amount is redrawn as an investment split in your name and used to buy growth shares. Offset is unchanged.",
   },
   debt_recycle_you_income: {
     who: "You",
     chip: "recycle → your dividend shares",
-    what: "into the offset, then borrowed back to buy dividend shares in your name",
-    tip: "Same recycle trick, but the shares pay cash each year.",
+    what: "onto the home loan, then redrawn to buy dividend shares in your name",
+    tip: "Same pay-down-then-redraw, but the shares pay cash each year.",
   },
   super_cc_you: {
     who: "You",
@@ -1028,17 +1178,47 @@ function Detail({
           {money(selected.superSpouse)}
         </Stat>
         <Stat
-          label="Taxable, you"
-          tip="Shares held in your name outside super. Dividends and CGT use your combined tax rate."
+          label="Investments, outside super"
+          tip="Shares outside super at the horizon, still unsold. Your name plus spouse's name."
         >
-          {money(selected.taxableYou)}
+          {money(selected.investmentOutsideSuper)}
+          {selected.taxableYou > 1 && selected.taxableSpouse > 1 ? (
+            <span className="sub">
+              {" "}
+              you {money(selected.taxableYou)}, spouse {money(selected.taxableSpouse)}
+            </span>
+          ) : selected.taxableSpouse > 1 && selected.taxableYou <= 1 ? (
+            <span className="sub"> in spouse's name</span>
+          ) : selected.taxableYou > 1 ? (
+            <span className="sub"> in your name</span>
+          ) : null}
         </Stat>
         <Stat
-          label="Taxable, spouse"
-          tip="Shares held in their name outside super. Dividends and CGT use their combined tax rate."
+          label="Tax on those if sold"
+          tip="Yield tax plus CGT if you sold at the horizon. Does not include the investment-loan deduction against salary."
         >
-          {money(selected.taxableSpouse)}
+          {money(selected.investmentTaxIfSold)}
         </Stat>
+        <Stat
+          label="Yield tax"
+          tip="Income tax on dividends over the years. Not CGT."
+        >
+          {money(selected.investmentIncomeTax)}
+        </Stat>
+        <Stat
+          label="CGT if sold"
+          tip="Capital gains tax if you sold the taxable shares on the last day, under the 1 Jul 2027 rules."
+        >
+          {money(selected.exitCgt)}
+        </Stat>
+        {cgtDelta > 1 ? (
+          <Stat
+            label="Extra CGT vs old 50% discount"
+            tip="How much more CGT this is than the old 50% discount on the whole nominal gain."
+          >
+            {money(cgtDelta)}
+          </Stat>
+        ) : null}
         <Stat
           label="Home loan / offset"
           tip="Remaining home-loan principal and offset balance at the horizon. Offset still cuts interest if it is sitting against the loan."
@@ -1052,19 +1232,10 @@ function Detail({
           {money(selected.investmentLoan)}
         </Stat>
         <Stat
-          label="Income tax over horizon"
-          tip="Tax on dividends over the years, minus any deduction for investment-loan interest. A negative number means the deduction saved tax on salary."
+          label="Net tax, including loan deduction"
+          tip="Dividend tax minus the investment-loan interest deduction against salary. Negative means the split saved tax on your wage. Different from tax on the shares if sold."
         >
           {money(selected.totalIncomeTax)}
-        </Stat>
-        <Stat
-          label="Exit CGT vs old 50% discount"
-          tip="CGT if you sold the taxable shares at the horizon, under the 1 Jul 2027 rules. CPI indexation and a 30% minimum on the real gain. The extra vs legacy is how much more that is than the old 50% discount on the whole nominal gain."
-        >
-          {money(selected.exitCgt)}
-          {cgtDelta > 1 ? (
-            <span className="sub"> +{money(cgtDelta)} vs legacy</span>
-          ) : null}
         </Stat>
       </dl>
       {selected.warnings.length ? (
@@ -1142,7 +1313,10 @@ function lumpExtra(
     const person = id === "super_cc_you" ? household.you : household.spouse;
     const intoFund =
       amount * (1 - household.assumptions.concessionalContributionsTax);
-    const ccThis = person.concessionalUsedThisFy + amount;
+    const ccThis =
+      Math.max(0, person.employerSgThisFy) +
+      Math.max(0, person.extraConcessionalThisFy) +
+      amount;
     const over =
       person.taxableIncome +
       ccThis -
@@ -1150,7 +1324,7 @@ function lumpExtra(
     const div293 =
       over <= 0 || amount <= 0 ? 0 : Math.min(ccThis, over) * 0.15;
     const refund =
-      amount * (person.marginalRate + person.medicareLevy) - div293;
+      -taxDelta(person.taxableIncome, -amount, person.medicareLevy) - div293;
     const whose = id === "super_cc_you" ? "your" : "their";
     return `Lands in ${whose} super as about ${money(intoFund)} after the fund's 15%. Tax refund about ${money(refund)} goes to the offset.`;
   }
@@ -1161,23 +1335,42 @@ function lumpExtra(
     return "Lands in your spouse's super in full. No extra tax cut.";
   }
   if (id.startsWith("debt_recycle_")) {
-    return `Also ${money(amount)} extra in the offset, and ${money(amount)} of investment loan in your name.`;
+    return `Home loan down by ${money(amount)}. ${money(amount)} investment split in your name. Offset unchanged.`;
   }
   return null;
 }
 
+const SUPER_OPTIONS: { id: SuperFill; label: string }[] = [
+  { id: "none", label: "Skip" },
+  { id: "you", label: "Your tax-cut, to cap" },
+  { id: "spouse", label: "Spouse tax-cut, to cap" },
+  { id: "you_then_spouse", label: "Both tax-cuts, you first" },
+];
+
+const AFTER_TAX_OPTIONS: { id: SuperFill; label: string }[] = [
+  { id: "none", label: "Skip" },
+  { id: "you", label: "Your after-tax, to cap" },
+  { id: "spouse", label: "Spouse after-tax, to cap" },
+  { id: "you_then_spouse", label: "Both after-tax, you first" },
+];
+
 function Mixer({
-  lump,
+  household,
   mix,
   mixSum,
   onChange,
 }: {
-  lump: number;
+  household: Household;
   mix: Allocation;
   mixSum: number;
   onChange: (m: Allocation) => void;
 }) {
+  const lump = household.lumpSum;
   const leftover = lump - mixSum;
+  const [cc, setCc] = useState<SuperFill>("none");
+  const [ncc, setNcc] = useState<SuperFill>("none");
+  const [rest, setRest] = useState<(typeof REST_BUCKETS)[number] | "">("");
+  const fromStack = useRef(false);
   const groups: { title: string; ids: string[] }[] = [
     { title: "Loan", ids: ["offset", "extra_repay"] },
     {
@@ -1205,49 +1398,122 @@ function Mixer({
   ];
   const byId = new Map(MIX_BUCKETS.map((b) => [b.id, b]));
 
+  const applyStack = (
+    nextCc: SuperFill,
+    nextNcc: SuperFill,
+    nextRest: (typeof REST_BUCKETS)[number] | "",
+  ) => {
+    setCc(nextCc);
+    setNcc(nextNcc);
+    setRest(nextRest);
+    fromStack.current = Boolean(nextRest);
+    if (!nextRest) onChange({});
+  };
+
+  useEffect(() => {
+    if (!fromStack.current || !rest) return;
+    onChange(stackAllocation(household, cc, ncc, rest));
+  }, [household, cc, ncc, rest, onChange]);
+
   return (
     <section className="mix-sheet">
       <p className="kicker">
-        <Tip text="Build your own split of the lump. It appears as an extra row in the ranking. Leave every box empty to rank only the presets.">
+        <Tip text="Three steps fill remaining room, then dump leftover in one bucket. That split is the Yours row. The ranking also tries these stacks itself and keeps the winners as extra rows.">
           Your mix
         </Tip>
       </p>
       <p className="summary">
-        Separate from the ready-made lives above. Split the lump yourself if
-        none of those fit. Leave every box empty to hide this row. Leftover
-        dollars, and anything over a super cap, go to the offset.
+        Super fills to this year's remaining room, not the whole lump. After-tax
+        caps are large, so they can swallow leftover before recycle or shares
+        get any. Skip after-tax if you want leftover recycled. Set leftover to
+        Don't add a Yours row to hide that row.
       </p>
-      <div className="mix-groups">
-        {groups.map((g) => (
-          <div key={g.title} className="mix-group">
-            <h3>{g.title}</h3>
-            <div className="mixer-grid">
-              {g.ids.map((id) => {
-                const b = byId.get(id);
-                if (!b) return null;
-                return (
-                  <MixerRow
-                    key={b.id}
-                    label={b.label}
-                    tip={b.tip}
-                    value={mix[b.id] ?? 0}
-                    onChange={(n) => onChange({ ...mix, [b.id]: n })}
-                  />
-                );
-              })}
-            </div>
-          </div>
-        ))}
+      <div className="stack-grid">
+        <label className="field">
+          <span>First, tax-cut</span>
+          <select
+            value={cc}
+            onChange={(e) =>
+              applyStack(e.target.value as SuperFill, ncc, rest)
+            }
+          >
+            {SUPER_OPTIONS.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Then, after-tax</span>
+          <select
+            value={ncc}
+            onChange={(e) =>
+              applyStack(cc, e.target.value as SuperFill, rest)
+            }
+          >
+            {AFTER_TAX_OPTIONS.map((o) => (
+              <option key={`ncc-${o.id}`} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Leftover</span>
+          <select
+            value={rest}
+            onChange={(e) => {
+              const v = e.target.value as (typeof REST_BUCKETS)[number] | "";
+              applyStack(cc, ncc, v);
+            }}
+          >
+            <option value="">Don't add a Yours row</option>
+            {REST_BUCKETS.map((id) => (
+              <option key={id} value={id}>
+                {byId.get(id)?.label ?? id}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       <p className={`mixer-sum ${mixSum > 0 && leftover < -1 ? "bad" : ""}`}>
         {mixSum <= 0
-          ? "Leave blank to rank only the presets."
+          ? "Pick a leftover bucket to rank your stack, or type exact dollars below."
           : leftover < -1
             ? `Allocated ${money(mixSum)}. ${money(-leftover)} over the lump.`
             : leftover > 1
               ? `Allocated ${money(mixSum)} of ${money(lump)}; ${money(leftover)} will sit in the offset.`
               : `Allocated ${money(mixSum)} of ${money(lump)}.`}
       </p>
+      <details className="assumptions">
+        <summary>Type exact dollars</summary>
+        <div className="mix-groups" style={{ marginTop: "0.8rem" }}>
+          {groups.map((g) => (
+            <div key={g.title} className="mix-group">
+              <h3>{g.title}</h3>
+              <div className="mixer-grid">
+                {g.ids.map((id) => {
+                  const b = byId.get(id);
+                  if (!b) return null;
+                  return (
+                    <MixerRow
+                      key={b.id}
+                      label={b.label}
+                      tip={b.tip}
+                      value={mix[b.id] ?? 0}
+                      onChange={(n) => {
+                        fromStack.current = false;
+                        onChange({ ...mix, [b.id]: n });
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </details>
     </section>
   );
 }
@@ -1266,10 +1532,10 @@ function MixerRow({
   return (
     <>
       <Tip text={tip}>{label}</Tip>
-      <input
-        value={value || ""}
-        placeholder="0"
-        onChange={(e) => onChange(parseNum(e.target.value))}
+      <NumInput
+        value={value}
+        blankZero
+        onChange={onChange}
       />
     </>
   );

@@ -1,14 +1,24 @@
-import { concessionalRoom, nccRoom, remainingAfter } from "./caps.js";
+import {
+  concessionalCommittedThisFy,
+  concessionalRoom,
+  nccRoom,
+  remainingAfter,
+} from "./caps.js";
 import { pmt, stepHomeLoan } from "./loan.js";
 import { buildPresets } from "./presets.js";
 import {
+  allocationKey,
+  buildStacks,
+  pickDisplayedResults,
+} from "./stacks.js";
+import {
   addMonthsIso,
-  combinedMarginalRate,
-  dividendTax,
   division293Tax,
   estimateHybridCgt,
+  frankingCredits,
   monthlyRate,
   round2,
+  taxDelta,
 } from "./tax.js";
 import {
   DISCLAIMER,
@@ -18,6 +28,7 @@ import {
   type BucketId,
   type Household,
   type Person,
+  type PersonId,
   type RunReport,
   type ScenarioDef,
   type ScenarioResult,
@@ -39,13 +50,30 @@ const BUCKETS: BucketId[] = [
   "super_ncc_spouse",
 ];
 
-type SleeveState = {
-  value: number;
+/**
+ * One parcel of a sleeve, dated when it actually arrived (initial lump,
+ * a DRP reinvestment that month, or an idle-offset sweep mid-simulation).
+ * Exit CGT is computed per lot so late-arriving money isn't back-dated to
+ * the simulation's start.
+ */
+type Lot = {
+  acquiredDate: string;
   cost: number;
+  value: number;
   valueAtCutover: number | null;
+};
+
+type SleeveState = {
+  lots: Lot[];
   sleeve: AssetSleeve;
   person: Person;
 };
+
+function sleeveValue(sl: SleeveState): number {
+  let v = 0;
+  for (const lot of sl.lots) v += lot.value;
+  return v;
+}
 
 type SimState = {
   homeLoan: number;
@@ -72,7 +100,20 @@ export function applyCaps(
   allocation: Allocation,
 ): { applied: Allocation; warnings: string[] } {
   const warnings: string[] = [];
-  const applied: Allocation = { ...allocation };
+  const lump = household.lumpSum;
+  const requested = allocationSum(allocation);
+  let applied: Allocation = { ...allocation };
+  if (requested > lump + 0.5) {
+    const scale = lump / requested;
+    applied = {};
+    for (const id of BUCKETS) {
+      const v = allocation[id];
+      if (v) applied[id] = round2(v * scale);
+    }
+    warnings.push(
+      `Allocated $${Math.round(requested).toLocaleString("en-AU")} but the lump is $${Math.round(lump).toLocaleString("en-AU")}. Every bucket scaled down to fit before caps.`,
+    );
+  }
   let leftover = 0;
 
   const clampSuper = (
@@ -136,6 +177,7 @@ export function runScenario(
   const months = Math.max(1, Math.round(a.horizonYears * 12));
   const start = a.startDate;
   const invRate = a.investmentLoanRate ?? household.loan.annualRate;
+  const restrictedOffset = Math.max(0, household.loan.restrictedOffset ?? 0);
   const scheduled =
     household.loan.monthlyRepayment ??
     pmt(
@@ -154,22 +196,32 @@ export function runScenario(
     cash: 0,
   };
 
-  const addSleeve = (amount: number, sleeve: AssetSleeve, person: Person) => {
+  const addSleeve = (
+    amount: number,
+    sleeve: AssetSleeve,
+    person: Person,
+    acquiredDate: string,
+  ) => {
     if (amount <= 0) return;
     state.sleeves.push({
-      value: amount,
-      cost: amount,
-      valueAtCutover: null,
+      lots: [{ acquiredDate, cost: amount, value: amount, valueAtCutover: null }],
       sleeve,
       person,
     });
   };
 
+  const addLot = (sl: SleeveState, amount: number, acquiredDate: string) => {
+    if (amount <= 0) return;
+    sl.lots.push({ acquiredDate, cost: amount, value: amount, valueAtCutover: null });
+  };
+
   const placeDebtRecycle = (amount: number, sleeve: AssetSleeve) => {
     if (amount <= 0) return;
-    state.offset += amount;
-    state.invLoan += amount;
-    addSleeve(amount, sleeve, household.you);
+    const pay = Math.min(amount, state.homeLoan);
+    state.homeLoan -= pay;
+    state.invLoan += pay;
+    addSleeve(pay, sleeve, household.you, start);
+    if (amount > pay) state.offset += amount - pay;
   };
 
   state.offset += applied.offset ?? 0;
@@ -180,10 +232,10 @@ export function runScenario(
     if (repay > pay) state.offset += repay - pay;
   }
 
-  addSleeve(applied.taxable_you_growth ?? 0, a.growthAsset, household.you);
-  addSleeve(applied.taxable_you_income ?? 0, a.incomeAsset, household.you);
-  addSleeve(applied.taxable_spouse_growth ?? 0, a.growthAsset, household.spouse);
-  addSleeve(applied.taxable_spouse_income ?? 0, a.incomeAsset, household.spouse);
+  addSleeve(applied.taxable_you_growth ?? 0, a.growthAsset, household.you, start);
+  addSleeve(applied.taxable_you_income ?? 0, a.incomeAsset, household.you, start);
+  addSleeve(applied.taxable_spouse_growth ?? 0, a.growthAsset, household.spouse, start);
+  addSleeve(applied.taxable_spouse_income ?? 0, a.incomeAsset, household.spouse, start);
   placeDebtRecycle(applied.debt_recycle_you_growth ?? 0, a.growthAsset);
   placeDebtRecycle(applied.debt_recycle_you_income ?? 0, a.incomeAsset);
 
@@ -192,10 +244,14 @@ export function runScenario(
     const intoFund = amount * (1 - a.concessionalContributionsTax);
     if (person.id === "you") state.superYou += intoFund;
     else state.superSpouse += intoFund;
-    const saving = amount * combinedMarginalRate(person);
+    const saving = -taxDelta(
+      person.taxableIncome,
+      -amount,
+      person.medicareLevy,
+    );
     const div293 = division293Tax(
       person.taxableIncome,
-      person.concessionalUsedThisFy + amount,
+      concessionalCommittedThisFy(person) + amount,
       a.div293Threshold,
     );
     const netRefund = saving - div293;
@@ -209,24 +265,49 @@ export function runScenario(
   state.superYou += applied.super_ncc_you ?? 0;
   state.superSpouse += applied.super_ncc_spouse ?? 0;
 
+  const sweepIdleOffset = (acquiredDate: string) => {
+    if (!a.sweepIdleOffset) return;
+    const idle = state.offset - state.homeLoan - restrictedOffset;
+    if (idle <= 0.5) return;
+    state.offset -= idle;
+    const existing = state.sleeves.find(
+      (s) => s.person.id === "spouse" && s.sleeve === a.growthAsset,
+    );
+    if (existing) {
+      addLot(existing, idle, acquiredDate);
+    } else {
+      addSleeve(idle, a.growthAsset, household.spouse, acquiredDate);
+    }
+  };
+  sweepIdleOffset(start);
+
   const superM = monthlyRate(a.superReturnRate) * (1 - a.superEarningsTax);
 
   let totalHomeInterest = 0;
   let totalInvInterest = 0;
   let totalIncomeTax = 0;
+  let totalInvestmentIncomeTax = 0;
   const years: YearRow[] = [];
 
   const fillAccessible = () => {
-    const taxableTotal = state.sleeves.reduce((s, x) => s + x.value, 0);
+    const taxableTotal = state.sleeves.reduce((s, x) => s + sleeveValue(x), 0);
     const superTotal = state.superYou + state.superSpouse;
     const netWealth =
-      taxableTotal + superTotal + state.offset + state.cash - state.homeLoan - state.invLoan;
+      taxableTotal +
+      superTotal +
+      state.offset +
+      state.cash -
+      state.homeLoan -
+      state.invLoan -
+      restrictedOffset;
     return {
       netWealth,
       accessible: netWealth - superTotal,
       superTotal,
       taxableTotal,
-      netDebt: state.homeLoan + state.invLoan - state.offset,
+      offsetAndCash: state.offset + state.cash,
+      debt: state.homeLoan + state.invLoan + restrictedOffset,
+      netDebt: state.homeLoan + state.invLoan + restrictedOffset - state.offset,
     };
   };
 
@@ -234,11 +315,70 @@ export function runScenario(
   let yearInvInterest = 0;
   let yearIncomeTax = 0;
 
+  const incomeGrowth = a.incomeGrowthRate ?? 0;
+  const ccYou = applied.super_cc_you ?? 0;
+  const ccSpouse = applied.super_cc_spouse ?? 0;
+
+  const grownIncome = (person: Person, yearIndex: number): number =>
+    person.taxableIncome * Math.pow(1 + incomeGrowth, yearIndex);
+
+  const yearWorkConcessional = (person: Person, yearIndex: number): number => {
+    const raw =
+      (Math.max(0, person.employerSgThisFy) +
+        Math.max(0, person.extraConcessionalThisFy)) *
+      Math.pow(1 + incomeGrowth, yearIndex);
+    if (yearIndex === 0) return raw;
+    return Math.min(raw, a.concessionalCap);
+  };
+  type YearTax = { assessable: number; franking: number; deductions: number };
+  const emptyTax = (): YearTax => ({
+    assessable: 0,
+    franking: 0,
+    deductions: 0,
+  });
+  let youYear = emptyTax();
+  let spouseYear = emptyTax();
+  let prevYearNet = 0;
+  let prevInvIncomeTax = 0;
+
+  const personBase = (id: PersonId, yearIndex: number): number => {
+    const p = id === "you" ? household.you : household.spouse;
+    const cc = id === "you" ? ccYou : ccSpouse;
+    const income = grownIncome(p, yearIndex);
+    return yearIndex === 0 ? income - cc : income;
+  };
+
+  const yearNet = (id: PersonId, yearIndex: number, st: YearTax): number => {
+    const p = id === "you" ? household.you : household.spouse;
+    return (
+      taxDelta(
+        personBase(id, yearIndex),
+        st.assessable - st.deductions,
+        p.medicareLevy,
+      ) - st.franking
+    );
+  };
+
+  const yearYieldTax = (id: PersonId, yearIndex: number, st: YearTax): number => {
+    const p = id === "you" ? household.you : household.spouse;
+    return (
+      taxDelta(personBase(id, yearIndex), st.assessable, p.medicareLevy) -
+      st.franking
+    );
+  };
+
   for (let m = 0; m < months; m++) {
     const date = addMonthsIso(start, m + 1);
     const prevDate = addMonthsIso(start, m);
     const crossedCutover =
       prevDate < "2027-07-01" && date >= "2027-07-01";
+    if (m > 0 && m % 12 === 0) {
+      youYear = emptyTax();
+      spouseYear = emptyTax();
+      prevYearNet = 0;
+      prevInvIncomeTax = 0;
+    }
+    const yearIndex = Math.floor(m / 12);
 
     const home = stepHomeLoan({
       balance: state.homeLoan,
@@ -265,41 +405,60 @@ export function runScenario(
 
     state.superYou *= 1 + superM;
     state.superSpouse *= 1 + superM;
+    const ccTax = 1 - a.concessionalContributionsTax;
+    state.superYou +=
+      (yearWorkConcessional(household.you, yearIndex) * ccTax) / 12;
+    state.superSpouse +=
+      (yearWorkConcessional(household.spouse, yearIndex) * ccTax) / 12;
 
-    let monthYieldTax = 0;
     const interestDeductionThisMonth = invInterest;
 
     for (const sl of state.sleeves) {
       const g = monthlyRate(sl.sleeve.growthRate);
       const y = monthlyRate(sl.sleeve.yieldRate);
       const mer = monthlyRate(sl.sleeve.mer);
-      sl.value *= 1 + g;
-      const yieldCash = sl.value * y;
-      sl.value *= 1 - mer;
+      let yieldCash = 0;
+      for (const lot of sl.lots) {
+        lot.value *= 1 + g;
+        const lotYield = lot.value * y;
+        lot.value *= 1 - mer;
+        yieldCash += lotYield;
+        if (crossedCutover && lot.valueAtCutover == null) {
+          lot.valueAtCutover = lot.value;
+        }
+      }
       if (sl.sleeve.reinvestDividends) {
-        sl.value += yieldCash;
-        sl.cost += yieldCash;
+        // A new parcel bought via DRP this month — dated now, not backdated
+        // to when the rest of the sleeve was acquired, so exit CGT sees its
+        // real holding period.
+        addLot(sl, yieldCash, date);
       } else {
         state.cash += yieldCash;
       }
-      monthYieldTax += dividendTax(
-        yieldCash,
-        sl.sleeve.frankingPercent,
-        sl.person,
-      );
-      if (crossedCutover && sl.valueAtCutover == null) {
-        sl.valueAtCutover = sl.value;
+      if (yieldCash > 0) {
+        const credits = frankingCredits(yieldCash, sl.sleeve.frankingPercent);
+        const bucket = sl.person.id === "you" ? youYear : spouseYear;
+        bucket.assessable += yieldCash + credits;
+        bucket.franking += credits;
       }
     }
 
-    // Deductible investment-loan interest, attributed to you (the borrower).
-    const youMtr = combinedMarginalRate(household.you);
-    const gearingRelief = interestDeductionThisMonth * youMtr;
-    const netTax = monthYieldTax - gearingRelief;
+    youYear.deductions += interestDeductionThisMonth;
+    const netTaxYtd =
+      yearNet("you", yearIndex, youYear) +
+      yearNet("spouse", yearIndex, spouseYear);
+    const netTax = netTaxYtd - prevYearNet;
+    prevYearNet = netTaxYtd;
     totalIncomeTax += netTax;
     yearIncomeTax += netTax;
+    const yieldTaxYtd =
+      yearYieldTax("you", yearIndex, youYear) +
+      yearYieldTax("spouse", yearIndex, spouseYear);
+    totalInvestmentIncomeTax += yieldTaxYtd - prevInvIncomeTax;
+    prevInvIncomeTax = yieldTaxYtd;
     if (a.refundsToOffset) state.offset -= netTax;
     else state.cash -= netTax;
+    sweepIdleOffset(date);
 
     if ((m + 1) % 12 === 0 || m === months - 1) {
       const year = Math.ceil((m + 1) / 12);
@@ -310,6 +469,8 @@ export function runScenario(
         accessible: round2(snap.accessible),
         superTotal: round2(snap.superTotal),
         taxableTotal: round2(snap.taxableTotal),
+        offsetAndCash: round2(snap.offsetAndCash),
+        debt: round2(snap.debt),
         netDebt: round2(snap.netDebt),
         homeInterest: round2(yearHomeInterest),
         investmentInterest: round2(yearInvInterest),
@@ -323,20 +484,27 @@ export function runScenario(
   }
 
   const endDate = addMonthsIso(start, months);
+  const endYearIndex = Math.max(0, Math.floor((months - 1) / 12));
   let exitCgt = 0;
   let exitCgtIfLegacy = 0;
   for (const sl of state.sleeves) {
-    const r = estimateHybridCgt({
-      proceeds: sl.value,
-      cost: sl.cost,
-      acquiredDate: start,
-      disposedDate: endDate,
-      valueAtCutover: sl.valueAtCutover ?? undefined,
-      inflationRate: a.inflationRate,
-      person: sl.person,
-    });
-    exitCgt += r.tax;
-    exitCgtIfLegacy += r.taxIfLegacyDiscount;
+    const person = {
+      ...sl.person,
+      taxableIncome: personBase(sl.person.id, endYearIndex),
+    };
+    for (const lot of sl.lots) {
+      const r = estimateHybridCgt({
+        proceeds: lot.value,
+        cost: lot.cost,
+        acquiredDate: lot.acquiredDate,
+        disposedDate: endDate,
+        valueAtCutover: lot.valueAtCutover ?? undefined,
+        inflationRate: a.inflationRate,
+        person,
+      });
+      exitCgt += r.tax;
+      exitCgtIfLegacy += r.taxIfLegacyDiscount;
+    }
   }
 
   const snap = fillAccessible();
@@ -360,12 +528,15 @@ export function runScenario(
     taxableYou: round2(
       state.sleeves
         .filter((s) => s.person.id === "you")
-        .reduce((s, x) => s + x.value, 0),
+        .reduce((s, x) => s + sleeveValue(x), 0),
     ),
     taxableSpouse: round2(
       state.sleeves
         .filter((s) => s.person.id === "spouse")
-        .reduce((s, x) => s + x.value, 0),
+        .reduce((s, x) => s + sleeveValue(x), 0),
+    ),
+    investmentOutsideSuper: round2(
+      state.sleeves.reduce((s, x) => s + sleeveValue(x), 0),
     ),
     homeLoan: round2(state.homeLoan),
     offset: round2(state.offset),
@@ -374,6 +545,8 @@ export function runScenario(
     totalHomeInterest: round2(totalHomeInterest),
     totalInvestmentInterest: round2(totalInvInterest),
     totalIncomeTax: round2(totalIncomeTax),
+    investmentIncomeTax: round2(totalInvestmentIncomeTax),
+    investmentTaxIfSold: round2(totalInvestmentIncomeTax + exitCgt),
     exitCgt: round2(exitCgt),
     netIfLiquidated: round2(snap.netWealth - exitCgt),
     exitCgtIfLegacyDiscount: round2(exitCgtIfLegacy),
@@ -386,10 +559,19 @@ export function runHousehold(
   household: Household,
   extra: ScenarioDef[] = [],
 ): RunReport {
-  const defs = [...buildPresets(household), ...extra];
+  const presets = buildPresets(household);
+  const presetKeys = new Set(presets.map((p) => allocationKey(p.allocation)));
+  const stacks = buildStacks(household).filter(
+    (s) => !presetKeys.has(allocationKey(s.allocation)),
+  );
+  const defs = [...presets, ...stacks, ...extra];
   const results = defs.map((d) => runScenario(household, d));
   results.sort((a, b) => b.netIfLiquidated - a.netIfLiquidated);
-  return { household, disclaimer: DISCLAIMER, results };
+  const shown = pickDisplayedResults(
+    results,
+    [...presets, ...extra].map((d) => d.id),
+  );
+  return { household, disclaimer: DISCLAIMER, results: shown };
 }
 
 function scenarioNotes(
@@ -400,14 +582,22 @@ function scenarioNotes(
   const notes: string[] = [];
   const ccYou = applied.super_cc_you ?? 0;
   const ccSp = applied.super_cc_spouse ?? 0;
-  const youRate = (combinedMarginalRate(household.you) * 100).toFixed(0);
   if (ccYou > 0) {
+    const saving = -taxDelta(
+      household.you.taxableIncome,
+      -ccYou,
+      household.you.medicareLevy,
+    );
+    const cents = ccYou > 0 ? Math.round((saving / ccYou) * 100) : 0;
     const div293 =
-      household.you.taxableIncome + ccYou > household.assumptions.div293Threshold;
+      household.you.taxableIncome +
+        concessionalCommittedThisFy(household.you) +
+        ccYou >
+      household.assumptions.div293Threshold;
     notes.push(
       div293
-        ? `The super tax-cut in your name saves about ${youRate} cents in the dollar on salary tax. Super then takes 15%. Because your income plus this contribution is over $250k, a bit of extra Division 293 tax applies on the slice over that line.`
-        : `The super tax-cut in your name saves about ${youRate} cents in the dollar on salary tax. Super then takes 15% of what went in. Still cheaper than leaving it in your name outside.`,
+        ? `The super tax-cut in your name saves about ${cents} cents in the dollar on salary tax under the FY2026-27 scale. Super then takes 15%. Because your income plus this contribution is over $250k, a bit of extra Division 293 tax applies on the slice over that line.`
+        : `The super tax-cut in your name saves about ${cents} cents in the dollar on salary tax under the FY2026-27 scale. Super then takes 15% of what went in. Still cheaper than leaving it in your name outside.`,
     );
   }
   if (ccSp > 0 && ccYou === 0) {
@@ -430,7 +620,7 @@ function scenarioNotes(
     0
   ) {
     notes.push(
-      "Debt recycle only works if the paperwork is clean. Money onto the offset or loan, then a separate investment loan, then shares. This model treats the investment-loan interest as tax-deductible. That still works for shares after 1 Jul 2027. It mostly does not for a rental house.",
+      "Debt recycle pays the lump onto the home loan, then redraws that amount as an investment split and buys shares in your name. Offset is not used for the redraw. Investment-loan interest is treated as deductible. That still works for shares after 1 Jul 2027. It mostly does not for a rental house.",
     );
   }
   if ((applied.extra_repay ?? 0) > 0) {

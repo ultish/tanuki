@@ -10,7 +10,7 @@ export type PersonId = "you" | "spouse";
 export type Person = {
   id: PersonId;
   label: string;
-  /** Marginal income tax rate as decimal, e.g. 0.45 */
+  /** Last-dollar PIT as decimal, e.g. 0.45. Ranking uses the FY2026-27 scale on taxable income. */
   marginalRate: number;
   /** Medicare levy as decimal, e.g. 0.02 */
   medicareLevy: number;
@@ -18,8 +18,10 @@ export type Person = {
   taxableIncome: number;
   /** Total super balance (AUD), prior 30 June */
   superBalance: number;
-  /** Concessional contributions already made this FY */
-  concessionalUsedThisFy: number;
+  /** Employer Super Guarantee expected this FY, before the lump */
+  employerSgThisFy: number;
+  /** Salary sacrifice or personal deductible contributions already planned this FY, before the lump */
+  extraConcessionalThisFy: number;
   /** Unused concessional cap carried forward (ATO 5-year rule, TSB test skipped) */
   unusedConcessionalCarryForward: number;
   age: number;
@@ -36,6 +38,12 @@ export type Loan = {
   /** If set, used as the P&I (or IO) payment; else computed from balance/term */
   monthlyRepayment?: number;
   interestOnly: boolean;
+  /**
+   * Offset money that isn't yours (e.g. a family loan you must repay).
+   * Still reduces home-loan interest while it sits there, but it's excluded
+   * from net wealth and never swept into investments.
+   */
+  restrictedOffset?: number;
 };
 
 export type AssetSleeve = {
@@ -57,6 +65,8 @@ export type Assumptions = {
   startDate: string;
   /** CPI used to index cost base after 1 Jul 2027 */
   inflationRate: number;
+  /** Grows taxable income, employer SG, and extra concessional each year */
+  incomeGrowthRate: number;
   growthAsset: AssetSleeve;
   incomeAsset: AssetSleeve;
   /**
@@ -75,12 +85,16 @@ export type Assumptions = {
   tsbNccLimit: number;
   /** TSB below this → full 3-year bring-forward */
   tsbBringForward3y: number;
+  /** TSB below this (and at/above tsbBringForward3y) → 2-year bring-forward */
+  tsbBringForward2y: number;
   /** Investment-loan rate; defaults to home rate when omitted */
   investmentLoanRate?: number;
   /** Park concessional-contribution tax refunds in the offset */
   refundsToOffset: boolean;
   /** Use NCC bring-forward when TSB allows */
   useNccBringForward: boolean;
+  /** Invest offset above the home loan in unlevered shares */
+  sweepIdleOffset: boolean;
 };
 
 export type Household = {
@@ -131,6 +145,10 @@ export type YearRow = {
   accessible: number;
   superTotal: number;
   taxableTotal: number;
+  /** Offset balance + uninvested cash — not netted against any loan. */
+  offsetAndCash: number;
+  /** Home loan + investment loan balance — not netted against offset. */
+  debt: number;
   netDebt: number;
   homeInterest: number;
   investmentInterest: number;
@@ -156,6 +174,8 @@ export type ScenarioResult = {
   superSpouse: number;
   taxableYou: number;
   taxableSpouse: number;
+  /** Taxable you + spouse. Shares outside super. */
+  investmentOutsideSuper: number;
   homeLoan: number;
   offset: number;
   investmentLoan: number;
@@ -163,6 +183,10 @@ export type ScenarioResult = {
   totalHomeInterest: number;
   totalInvestmentInterest: number;
   totalIncomeTax: number;
+  /** Tax on dividends/yield only. Does not include the investment-loan deduction. */
+  investmentIncomeTax: number;
+  /** investmentIncomeTax + exitCgt */
+  investmentTaxIfSold: number;
   /** CGT if liquidated at horizon (not deducted from netWealth unless noted) */
   exitCgt: number;
   /** netWealth − exitCgt */
@@ -183,4 +207,4 @@ export type RunReport = {
 };
 
 export const DISCLAIMER =
-  "Estimates only. Not financial, tax, or investment advice. Super caps are FY2026-27. CGT uses the 1 Jul 2027 cutover. CPI indexation and a 30% minimum on post-cutover gains. 50% discount only on eligible pre-cutover gain. Debt recycling assumes a clean paper trail. Pay down or offset, then a separate investment loan. Not ATO software.";
+  "Estimates only. Not financial, tax, or investment advice. Super caps are FY2026-27. CGT uses the 1 Jul 2027 cutover. CPI indexation and a 30% minimum on post-cutover gains. 50% discount only on eligible pre-cutover gain. Debt recycling pays down the home loan, then redraws an investment split. Not ATO software.";

@@ -5,7 +5,8 @@ export type Person = {
   medicareLevy: number;
   taxableIncome: number;
   superBalance: number;
-  concessionalUsedThisFy: number;
+  employerSgThisFy: number;
+  extraConcessionalThisFy: number;
   unusedConcessionalCarryForward: number;
   age: number;
 };
@@ -17,6 +18,7 @@ export type Loan = {
   remainingYears: number;
   monthlyRepayment?: number;
   interestOnly: boolean;
+  restrictedOffset?: number;
 };
 
 export type AssetSleeve = {
@@ -32,6 +34,7 @@ export type Assumptions = {
   horizonYears: number;
   startDate: string;
   inflationRate: number;
+  incomeGrowthRate: number;
   growthAsset: AssetSleeve;
   incomeAsset: AssetSleeve;
   superReturnRate: number;
@@ -43,9 +46,11 @@ export type Assumptions = {
   nccBringForwardCap: number;
   tsbNccLimit: number;
   tsbBringForward3y: number;
+  tsbBringForward2y: number;
   investmentLoanRate?: number;
   refundsToOffset: boolean;
   useNccBringForward: boolean;
+  sweepIdleOffset: boolean;
 };
 
 export type Household = {
@@ -64,6 +69,8 @@ export type YearRow = {
   accessible: number;
   superTotal: number;
   taxableTotal: number;
+  offsetAndCash: number;
+  debt: number;
   netDebt: number;
   homeInterest: number;
   investmentInterest: number;
@@ -86,6 +93,7 @@ export type ScenarioResult = {
   superSpouse: number;
   taxableYou: number;
   taxableSpouse: number;
+  investmentOutsideSuper: number;
   homeLoan: number;
   offset: number;
   investmentLoan: number;
@@ -93,6 +101,8 @@ export type ScenarioResult = {
   totalHomeInterest: number;
   totalInvestmentInterest: number;
   totalIncomeTax: number;
+  investmentIncomeTax: number;
+  investmentTaxIfSold: number;
   exitCgt: number;
   netIfLiquidated: number;
   exitCgtIfLegacyDiscount: number;

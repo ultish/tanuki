@@ -13,11 +13,18 @@ export const FY_2026_27 = {
   generalTransferBalanceCap: 2_100_000,
 } as const;
 
+export function concessionalCommittedThisFy(person: Person): number {
+  return (
+    Math.max(0, person.employerSgThisFy) +
+    Math.max(0, person.extraConcessionalThisFy)
+  );
+}
+
 export function concessionalRoom(person: Person, assumptions: Assumptions): number {
   const cap =
     assumptions.concessionalCap +
     Math.max(0, person.unusedConcessionalCarryForward) -
-    Math.max(0, person.concessionalUsedThisFy);
+    concessionalCommittedThisFy(person);
   const againstIncome = Math.max(0, person.taxableIncome);
   return Math.max(0, Math.min(cap, againstIncome));
 }
@@ -37,8 +44,8 @@ export function nccRoom(
   if (person.superBalance < assumptions.tsbBringForward3y) {
     return assumptions.nccBringForwardCap;
   }
-  // 2-year band: TSB in [1.84m, 1.97m)
-  if (person.superBalance < FY_2026_27.tsbBringForward2y) {
+  // 2-year band: TSB in [tsbBringForward3y, tsbBringForward2y)
+  if (person.superBalance < assumptions.tsbBringForward2y) {
     return assumptions.nonConcessionalCap * 2;
   }
   return assumptions.nonConcessionalCap;
