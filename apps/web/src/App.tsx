@@ -927,14 +927,17 @@ function ChartPanel({
         year: y.year,
         super: y.superTotal,
         investments: y.taxableTotal,
-        offsetAndCash: Math.max(0, y.offsetAndCash),
-        debt: -Math.max(0, y.debt),
+        offset: Math.max(0, y.offset + y.cash),
+        homeLoan: -Math.max(0, y.homeLoan),
+        investmentLoan: -Math.max(0, y.investmentLoan),
+        locked: -Math.max(0, y.restrictedOffset),
         netWealth: y.netWealth,
         offsetBaseline:
           baseYears.find((b) => b.year === y.year)?.netWealth ?? null,
       };
     });
   }, [selected, baseline]);
+  const hasLocked = chart.some((c) => c.locked < 0);
 
   return (
     <div className="chart-wrap">
@@ -954,6 +957,7 @@ function ChartPanel({
           <Tooltip
             formatter={(v) => money(Number(v ?? 0))}
             labelFormatter={(y) => `Year ${y}`}
+            wrapperStyle={{ zIndex: 20 }}
           />
           <Legend />
           <Area
@@ -979,8 +983,8 @@ function ChartPanel({
           <Area
             type="linear"
             stackId="assets"
-            dataKey="offsetAndCash"
-            name="Offset & cash"
+            dataKey="offset"
+            name="Offset (home loan)"
             stroke="#1f6b4a"
             fill="#1f6b4a"
             fillOpacity={0.8}
@@ -989,13 +993,35 @@ function ChartPanel({
           <Area
             type="linear"
             stackId="debt"
-            dataKey="debt"
-            name="Debt (loans + owed cash)"
+            dataKey="homeLoan"
+            name="Home loan"
             stroke="#a13d2f"
             fill="#a13d2f"
             fillOpacity={0.55}
             isAnimationActive={false}
           />
+          <Area
+            type="linear"
+            stackId="debt"
+            dataKey="investmentLoan"
+            name="Investment loan"
+            stroke="#c2703d"
+            fill="#c2703d"
+            fillOpacity={0.55}
+            isAnimationActive={false}
+          />
+          {hasLocked ? (
+            <Area
+              type="linear"
+              stackId="debt"
+              dataKey="locked"
+              name="Locked (not yours)"
+              stroke="#6b4c7a"
+              fill="#6b4c7a"
+              fillOpacity={0.55}
+              isAnimationActive={false}
+            />
+          ) : null}
           <Line
             type="linear"
             dataKey="netWealth"

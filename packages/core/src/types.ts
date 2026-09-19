@@ -144,11 +144,18 @@ export type YearRow = {
   netWealth: number;
   accessible: number;
   superTotal: number;
+  /** Shares outside super — you + spouse, own name + debt-recycled + swept idle offset. */
   taxableTotal: number;
-  /** Offset balance + uninvested cash — not netted against any loan. */
-  offsetAndCash: number;
-  /** Home loan + investment loan balance — not netted against offset. */
-  debt: number;
+  /** Owner-occupier home loan balance. */
+  homeLoan: number;
+  /** Investment (debt-recycle) loan balance. */
+  investmentLoan: number;
+  /** Full offset balance, including any restrictedOffset still sitting in it. */
+  offset: number;
+  /** Uninvested cash outside the offset account. */
+  cash: number;
+  /** Offset money that isn't yours (see Loan.restrictedOffset). Constant for the run. */
+  restrictedOffset: number;
   netDebt: number;
   homeInterest: number;
   investmentInterest: number;

@@ -305,11 +305,33 @@ export function runScenario(
       accessible: netWealth - superTotal,
       superTotal,
       taxableTotal,
-      offsetAndCash: state.offset + state.cash,
-      debt: state.homeLoan + state.invLoan + restrictedOffset,
+      homeLoan: state.homeLoan,
+      investmentLoan: state.invLoan,
+      offset: state.offset,
+      cash: state.cash,
+      restrictedOffset,
       netDebt: state.homeLoan + state.invLoan + restrictedOffset - state.offset,
     };
   };
+
+  const day0 = fillAccessible();
+  years.push({
+    year: 0,
+    netWealth: round2(day0.netWealth),
+    accessible: round2(day0.accessible),
+    superTotal: round2(day0.superTotal),
+    taxableTotal: round2(day0.taxableTotal),
+    homeLoan: round2(day0.homeLoan),
+    investmentLoan: round2(day0.investmentLoan),
+    offset: round2(day0.offset),
+    cash: round2(day0.cash),
+    restrictedOffset: round2(day0.restrictedOffset),
+    netDebt: round2(day0.netDebt),
+    homeInterest: 0,
+    investmentInterest: 0,
+    incomeTax: 0,
+    cgtTax: 0,
+  });
 
   let yearHomeInterest = 0;
   let yearInvInterest = 0;
@@ -469,8 +491,11 @@ export function runScenario(
         accessible: round2(snap.accessible),
         superTotal: round2(snap.superTotal),
         taxableTotal: round2(snap.taxableTotal),
-        offsetAndCash: round2(snap.offsetAndCash),
-        debt: round2(snap.debt),
+        homeLoan: round2(snap.homeLoan),
+        investmentLoan: round2(snap.investmentLoan),
+        offset: round2(snap.offset),
+        cash: round2(snap.cash),
+        restrictedOffset: round2(snap.restrictedOffset),
         netDebt: round2(snap.netDebt),
         homeInterest: round2(yearHomeInterest),
         investmentInterest: round2(yearInvInterest),

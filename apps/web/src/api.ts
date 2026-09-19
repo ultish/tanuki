@@ -69,8 +69,11 @@ export type YearRow = {
   accessible: number;
   superTotal: number;
   taxableTotal: number;
-  offsetAndCash: number;
-  debt: number;
+  homeLoan: number;
+  investmentLoan: number;
+  offset: number;
+  cash: number;
+  restrictedOffset: number;
   netDebt: number;
   homeInterest: number;
   investmentInterest: number;
