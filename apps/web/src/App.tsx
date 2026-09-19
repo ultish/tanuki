@@ -410,7 +410,13 @@ function NumInput({
       value={shown}
       placeholder={blankZero ? "0" : undefined}
       onFocus={() =>
-        setRaw(value == null || !Number.isFinite(value) ? "" : String(value))
+        setRaw(
+          value == null || !Number.isFinite(value)
+            ? ""
+            : digits != null
+              ? value.toFixed(digits)
+              : String(value),
+        )
       }
       onChange={(e) => {
         const next = e.target.value;
@@ -718,7 +724,7 @@ function HouseholdForm({
               }
               digits={2}
               onChange={(n) => setA({ investmentLoanRate: n / 100 })}
-              onClear={() => setA({ investmentLoanRate: undefined })}
+              onClear={() => setA({ investmentLoanRate: null })}
             />
           </Field>
         </div>

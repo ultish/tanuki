@@ -87,8 +87,13 @@ export type Assumptions = {
   tsbBringForward3y: number;
   /** TSB below this (and at/above tsbBringForward3y) → 2-year bring-forward */
   tsbBringForward2y: number;
-  /** Investment-loan rate; defaults to home rate when omitted */
-  investmentLoanRate?: number;
+  /**
+   * Investment-loan rate; falls back to the home rate when null. `null`
+   * rather than optional/undefined so a client can explicitly clear it —
+   * JSON.stringify drops `undefined` keys, so an optional field can never
+   * be un-set over a PUT, only ever set.
+   */
+  investmentLoanRate: number | null;
   /** Park concessional-contribution tax refunds in the offset */
   refundsToOffset: boolean;
   /** Use NCC bring-forward when TSB allows */

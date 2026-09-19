@@ -47,7 +47,7 @@ export type Assumptions = {
   tsbNccLimit: number;
   tsbBringForward3y: number;
   tsbBringForward2y: number;
-  investmentLoanRate?: number;
+  investmentLoanRate: number | null;
   refundsToOffset: boolean;
   useNccBringForward: boolean;
   sweepIdleOffset: boolean;
