@@ -18,9 +18,23 @@ export type Person = {
   taxableIncome: number;
   /** Total super balance (AUD), prior 30 June */
   superBalance: number;
-  /** Employer Super Guarantee expected this FY, before the lump */
+  /** Annual gross salary (OTE) this FY — the basis for `sgRatePercent` below. */
+  salary: number;
+  /** Employer Super Guarantee rate as a percentage, e.g. 12 for 12%. */
+  sgRatePercent: number;
+  /** Salary-sacrifice or personal deductible contribution, per fortnight, before tax. */
+  extraConcessionalFortnightly: number;
+  /**
+   * Employer Super Guarantee expected this FY, before the lump.
+   * Derived — `salary * sgRatePercent / 100`, kept in sync by `mergePerson`.
+   * Still a real field because the engine reads it directly.
+   */
   employerSgThisFy: number;
-  /** Salary sacrifice or personal deductible contributions already planned this FY, before the lump */
+  /**
+   * Salary sacrifice or personal deductible contributions already planned
+   * this FY, before the lump.
+   * Derived — `extraConcessionalFortnightly * 26`, kept in sync by `mergePerson`.
+   */
   extraConcessionalThisFy: number;
   /** Unused concessional cap carried forward (ATO 5-year rule, TSB test skipped) */
   unusedConcessionalCarryForward: number;

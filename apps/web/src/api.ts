@@ -5,6 +5,9 @@ export type Person = {
   medicareLevy: number;
   taxableIncome: number;
   superBalance: number;
+  salary: number;
+  sgRatePercent: number;
+  extraConcessionalFortnightly: number;
   employerSgThisFy: number;
   extraConcessionalThisFy: number;
   unusedConcessionalCarryForward: number;

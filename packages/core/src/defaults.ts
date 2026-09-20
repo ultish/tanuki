@@ -1,5 +1,19 @@
 import { FY_2026_27 } from "./caps.js";
+import { round2 } from "./tax.js";
 import type { Assumptions, Household, Person } from "./types.js";
+
+/** Legislated Super Guarantee rate default, FY2026-27. */
+const DEFAULT_SG_RATE_PERCENT = 12;
+
+/** `salary * sgRatePercent / 100` — the formula behind `Person.employerSgThisFy`. */
+export function annualSg(salary: number, sgRatePercent: number): number {
+  return round2(salary * (sgRatePercent / 100));
+}
+
+/** `fortnightly * 26` — the formula behind `Person.extraConcessionalThisFy`. */
+export function annualFromFortnightly(fortnightly: number): number {
+  return round2(fortnightly * 26);
+}
 
 export function defaultPerson(id: Person["id"], overrides: Partial<Person> = {}): Person {
   if (id === "you") {
@@ -10,6 +24,9 @@ export function defaultPerson(id: Person["id"], overrides: Partial<Person> = {})
       medicareLevy: 0.02,
       taxableIncome: 220_000,
       superBalance: 280_000,
+      salary: 0,
+      sgRatePercent: DEFAULT_SG_RATE_PERCENT,
+      extraConcessionalFortnightly: 0,
       employerSgThisFy: 0,
       extraConcessionalThisFy: 0,
       unusedConcessionalCarryForward: 0,
@@ -24,6 +41,9 @@ export function defaultPerson(id: Person["id"], overrides: Partial<Person> = {})
     medicareLevy: 0.02,
     taxableIncome: 90_000,
     superBalance: 160_000,
+    salary: 0,
+    sgRatePercent: DEFAULT_SG_RATE_PERCENT,
+    extraConcessionalFortnightly: 0,
     employerSgThisFy: 0,
     extraConcessionalThisFy: 0,
     unusedConcessionalCarryForward: 0,
@@ -127,17 +147,37 @@ function mergePerson(
   };
   const hasSplit =
     p.employerSgThisFy != null || p.extraConcessionalThisFy != null;
+
+  const sgRatePercent = num(p.sgRatePercent, base.sgRatePercent);
+  // Old saves only had the annual dollar amount. First time one of those
+  // shows up without the new % fields, back it into a salary/fortnightly
+  // figure so the UI has something sane to show instead of 0.
+  const salary =
+    p.salary != null
+      ? num(p.salary, base.salary)
+      : p.employerSgThisFy != null && sgRatePercent > 0
+        ? round2((p.employerSgThisFy / sgRatePercent) * 100)
+        : base.salary;
+  const extraConcessionalFortnightly =
+    p.extraConcessionalFortnightly != null
+      ? num(p.extraConcessionalFortnightly, base.extraConcessionalFortnightly)
+      : p.extraConcessionalThisFy != null
+        ? round2(p.extraConcessionalThisFy / 26)
+        : hasSplit
+          ? base.extraConcessionalFortnightly
+          : p.concessionalUsedThisFy != null
+            ? round2(p.concessionalUsedThisFy / 26)
+            : base.extraConcessionalFortnightly;
+
   const next: Person = {
     ...base,
     ...p,
     id,
-    employerSgThisFy: num(p.employerSgThisFy, base.employerSgThisFy),
-    extraConcessionalThisFy: num(
-      p.extraConcessionalThisFy,
-      hasSplit
-        ? base.extraConcessionalThisFy
-        : num(p.concessionalUsedThisFy, base.extraConcessionalThisFy),
-    ),
+    salary,
+    sgRatePercent,
+    extraConcessionalFortnightly,
+    employerSgThisFy: annualSg(salary, sgRatePercent),
+    extraConcessionalThisFy: annualFromFortnightly(extraConcessionalFortnightly),
   };
   delete (next as { concessionalUsedThisFy?: number }).concessionalUsedThisFy;
   return next;

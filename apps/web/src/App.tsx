@@ -26,6 +26,8 @@ import {
 } from "./api";
 import {
   REST_BUCKETS,
+  annualFromFortnightly,
+  annualSg,
   lastDollarPit,
   stackAllocation,
   taxDelta,
@@ -767,6 +769,21 @@ function PersonFields({
   person: Person;
   onChange: (p: Partial<Person>) => void;
 }) {
+  const setContribution = (patch: Partial<Person>) => {
+    const next = { ...person, ...patch };
+    onChange({
+      ...patch,
+      employerSgThisFy: annualSg(next.salary, next.sgRatePercent),
+      extraConcessionalThisFy: annualFromFortnightly(
+        next.extraConcessionalFortnightly,
+      ),
+    });
+  };
+  const fortnightlySalary = person.salary / 26;
+  const extraAsPctOfSalary =
+    fortnightlySalary > 0
+      ? ` (${pct(person.extraConcessionalFortnightly / fortnightlySalary, 1)} of salary)`
+      : "";
   return (
     <div className="grid-2">
       <Field
@@ -809,22 +826,44 @@ function PersonFields({
         />
       </Field>
       <Field
-        label="Employer SG this FY"
-        tip="Full year of Super Guarantee the employer will pay, even if none of the lump goes into super. Sole traders usually leave this at 0."
+        label="Annual salary (OTE)"
+        tip="Gross salary before tax and before any salary sacrifice — what Super Guarantee is calculated on. Sole traders usually leave this at 0 and use Employer SG % as 0 too."
       >
         <NumInput
-          value={person.employerSgThisFy}
-          onChange={(n) => onChange({ employerSgThisFy: n })}
+          value={person.salary}
+          onChange={(n) => setContribution({ salary: n })}
         />
       </Field>
       <Field
-        label="Extra concessional this FY"
-        tip="Salary sacrifice or personal deductible contributions already happening this year, not the lump. A sole trader puts what they already pay themselves here."
+        label="Employer SG %"
+        tip="Super Guarantee rate. 12% is the legislated minimum from 1 Jul 2025 — raise it only if your employer pays above the minimum."
       >
         <NumInput
-          value={person.extraConcessionalThisFy}
-          onChange={(n) => onChange({ extraConcessionalThisFy: n })}
+          value={person.sgRatePercent}
+          digits={1}
+          onChange={(n) => setContribution({ sgRatePercent: n })}
         />
+      </Field>
+      <Field
+        label="= Employer SG this FY"
+        tip="Salary × SG %. Full year of Super Guarantee the employer will pay, even if none of the lump goes into super."
+      >
+        <input readOnly value={money(person.employerSgThisFy)} />
+      </Field>
+      <Field
+        label={`Extra concessional, per fortnight${extraAsPctOfSalary}`}
+        tip="Salary sacrifice or personal deductible contribution already coming out each pay, before tax — not the lump. A sole trader puts what they already pay themselves here, divided by 26. The percentage is this amount over your fortnightly salary, set above."
+      >
+        <NumInput
+          value={person.extraConcessionalFortnightly}
+          onChange={(n) => setContribution({ extraConcessionalFortnightly: n })}
+        />
+      </Field>
+      <Field
+        label="= Extra concessional this FY"
+        tip="Fortnightly amount × 26 pay cycles."
+      >
+        <input readOnly value={money(person.extraConcessionalThisFy)} />
       </Field>
       <Field
         label="Unused CC carry-forward"
