@@ -7,6 +7,8 @@ export {
 } from "./engine.js";
 export { EXPLAINERS, type Explainer } from "./explainers.js";
 export {
+  annualFromFortnightly,
+  annualSg,
   defaultAssumptions,
   defaultHousehold,
   defaultPerson,
@@ -28,7 +30,6 @@ export {
   bracketTax,
   combinedMarginalRate,
   daysBetweenIso,
-  dividendTax,
   division293Tax,
   estimateHybridCgt,
   frankingCredits,

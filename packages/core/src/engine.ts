@@ -97,10 +97,29 @@ export function allocationSum(a: Allocation): number {
  */
 export function applyCaps(
   household: Household,
-  allocation: Allocation,
+  rawAllocation: Allocation,
 ): { applied: Allocation; warnings: string[] } {
   const warnings: string[] = [];
   const lump = household.lumpSum;
+
+  // A negative bucket can offset a positive one and slip an over-lump
+  // allocation past the scale-down check below, so it's dropped up front
+  // rather than clamped later.
+  let hadNegative = false;
+  const allocation: Allocation = {};
+  for (const id of BUCKETS) {
+    const v = rawAllocation[id];
+    if (v == null) continue;
+    if (v < 0) {
+      hadNegative = true;
+      continue;
+    }
+    allocation[id] = v;
+  }
+  if (hadNegative) {
+    warnings.push("Negative amounts aren't allowed in the mix. They were dropped.");
+  }
+
   const requested = allocationSum(allocation);
   let applied: Allocation = { ...allocation };
   if (requested > lump + 0.5) {
@@ -217,11 +236,18 @@ export function runScenario(
 
   const placeDebtRecycle = (amount: number, sleeve: AssetSleeve) => {
     if (amount <= 0) return;
-    const pay = Math.min(amount, state.homeLoan);
+    const availableBalance = state.homeLoan;
+    const pay = Math.min(amount, availableBalance);
     state.homeLoan -= pay;
     state.invLoan += pay;
     addSleeve(pay, sleeve, household.you, start);
-    if (amount > pay) state.offset += amount - pay;
+    if (amount > pay) {
+      const shortfall = amount - pay;
+      state.offset += shortfall;
+      warnings.push(
+        `Asked to debt-recycle $${Math.round(amount).toLocaleString("en-AU")} but the home loan balance is only $${Math.round(availableBalance).toLocaleString("en-AU")}. The extra $${Math.round(shortfall).toLocaleString("en-AU")} was parked in the offset instead.`,
+      );
+    }
   };
 
   state.offset += applied.offset ?? 0;
@@ -239,24 +265,58 @@ export function runScenario(
   placeDebtRecycle(applied.debt_recycle_you_growth ?? 0, a.growthAsset);
   placeDebtRecycle(applied.debt_recycle_you_income ?? 0, a.incomeAsset);
 
-  const contributeCc = (person: Person, amount: number) => {
-    if (amount <= 0) return 0;
-    const intoFund = amount * (1 - a.concessionalContributionsTax);
-    if (person.id === "you") state.superYou += intoFund;
-    else state.superSpouse += intoFund;
-    const saving = -taxDelta(
-      person.taxableIncome,
-      -amount,
-      person.medicareLevy,
-    );
+  /**
+   * Extra tax on top of the fund's flat 15%, for a concessional contribution
+   * arriving this year: Division 293 above the income threshold, and
+   * excess-concessional-contributions tax above the cap (marginal rate,
+   * less a 15% offset for the contributions tax the fund already withheld).
+   * `raw` is the ongoing SG + salary-sacrifice for the year (uncapped —
+   * employer SG is compulsory and is paid in full regardless of anyone's
+   * personal cap); `lump` is an optional one-off addition on top (only ever
+   * nonzero in year one, from the chosen super-cc allocation).
+   */
+  const concessionalExtraTax = (
+    person: Person,
+    taxableIncomeThisYear: number,
+    raw: number,
+    lump: number,
+  ): number => {
+    const excess = Math.max(0, raw - a.concessionalCap);
+    const excessTax =
+      excess <= 0
+        ? 0
+        : Math.max(
+            0,
+            taxDelta(taxableIncomeThisYear, excess, person.medicareLevy) -
+              excess * a.concessionalContributionsTax,
+          );
+    const cappedRaw = Math.min(raw, a.concessionalCap);
     const div293 = division293Tax(
-      person.taxableIncome,
-      concessionalCommittedThisFy(person) + amount,
+      taxableIncomeThisYear,
+      cappedRaw + lump,
       a.div293Threshold,
     );
-    const netRefund = saving - div293;
-    if (a.refundsToOffset) state.offset += netRefund;
-    else state.cash += netRefund;
+    return excessTax + div293;
+  };
+
+  const contributeCc = (person: Person, amount: number) => {
+    const extraTax = concessionalExtraTax(
+      person,
+      person.taxableIncome,
+      concessionalCommittedThisFy(person),
+      amount,
+    );
+    let netRefund = -extraTax;
+    if (amount > 0) {
+      const intoFund = amount * (1 - a.concessionalContributionsTax);
+      if (person.id === "you") state.superYou += intoFund;
+      else state.superSpouse += intoFund;
+      netRefund += -taxDelta(person.taxableIncome, -amount, person.medicareLevy);
+    }
+    if (netRefund !== 0) {
+      if (a.refundsToOffset) state.offset += netRefund;
+      else state.cash += netRefund;
+    }
     return netRefund;
   };
 
@@ -344,14 +404,14 @@ export function runScenario(
   const grownIncome = (person: Person, yearIndex: number): number =>
     person.taxableIncome * Math.pow(1 + incomeGrowth, yearIndex);
 
-  const yearWorkConcessional = (person: Person, yearIndex: number): number => {
-    const raw =
-      (Math.max(0, person.employerSgThisFy) +
-        Math.max(0, person.extraConcessionalThisFy)) *
-      Math.pow(1 + incomeGrowth, yearIndex);
-    if (yearIndex === 0) return raw;
-    return Math.min(raw, a.concessionalCap);
-  };
+  // Ongoing SG + salary-sacrifice for the year, uncapped — it's compulsory
+  // and is paid into the fund in full even past anyone's personal cap. The
+  // excess-over-cap and Division 293 consequences are handled separately by
+  // concessionalExtraTax, once per year (see the main loop).
+  const yearWorkConcessional = (person: Person, yearIndex: number): number =>
+    (Math.max(0, person.employerSgThisFy) +
+      Math.max(0, person.extraConcessionalThisFy)) *
+    Math.pow(1 + incomeGrowth, yearIndex);
   type YearTax = { assessable: number; franking: number; deductions: number };
   const emptyTax = (): YearTax => ({
     assessable: 0,
@@ -402,6 +462,29 @@ export function runScenario(
     }
     const yearIndex = Math.floor(m / 12);
 
+    // Year one's ongoing-contribution tax is already folded into
+    // contributeCc (combined with the lump, if any). From year two on there
+    // is no lump to combine with, so assess it directly, once per year.
+    if (m % 12 === 0 && yearIndex >= 1) {
+      const extraYou = concessionalExtraTax(
+        household.you,
+        grownIncome(household.you, yearIndex),
+        yearWorkConcessional(household.you, yearIndex),
+        0,
+      );
+      const extraSpouse = concessionalExtraTax(
+        household.spouse,
+        grownIncome(household.spouse, yearIndex),
+        yearWorkConcessional(household.spouse, yearIndex),
+        0,
+      );
+      const extra = extraYou + extraSpouse;
+      if (extra > 0) {
+        if (a.refundsToOffset) state.offset -= extra;
+        else state.cash -= extra;
+      }
+    }
+
     const home = stepHomeLoan({
       balance: state.homeLoan,
       offset: state.offset,
@@ -424,6 +507,11 @@ export function runScenario(
     const invInterest = state.invLoan * (invRate / 12);
     totalInvInterest += invInterest;
     yearInvInterest += invInterest;
+    // The deduction below only reduces tax owed; the interest itself still
+    // has to be paid, or it isn't a real deduction. Without this, a higher
+    // investment-loan rate manufactures a bigger "refund" with no offsetting
+    // cost, so debt recycling would never stop looking better as rates rise.
+    state.cash -= invInterest;
 
     state.superYou *= 1 + superM;
     state.superSpouse *= 1 + superM;

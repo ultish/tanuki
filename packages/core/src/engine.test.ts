@@ -74,20 +74,35 @@ describe("concessional room", () => {
   it("subtracts employer SG and extra concessional from the cap", () => {
     const h = hush({
       you: defaultPerson("you", {
-        employerSgThisFy: 20_000,
-        extraConcessionalThisFy: 5_000,
+        salary: 20_000 / 0.12,
+        sgRatePercent: 12,
+        extraConcessionalFortnightly: 5_000 / 26,
       }),
     });
+    expect(h.you.employerSgThisFy).toBeCloseTo(20_000, 2);
+    expect(h.you.extraConcessionalThisFy).toBeCloseTo(5_000, 2);
     expect(concessionalRoom(h.you, h.assumptions)).toBe(7_500);
     const row = buildPresets(h).find((p) => p.id === "cc-you-spouse-growth");
     expect(row?.allocation.super_cc_you).toBe(7_500);
+  });
+
+  it("maps old employerSgThisFy/extraConcessionalThisFy onto salary/fortnightly", () => {
+    const h = mergeHousehold(defaultHousehold(), {
+      you: { employerSgThisFy: 24_000, extraConcessionalThisFy: 12_000 },
+    } as Partial<Household>);
+    // 12% default SG rate backed out into a salary, and the annual figure
+    // split back into a fortnightly amount — both round-trip to within a
+    // cent, not exactly, since the fortnightly figure is stored rounded.
+    expect(h.you.salary).toBeCloseTo(200_000, 0);
+    expect(h.you.employerSgThisFy).toBeCloseTo(24_000, 0);
+    expect(h.you.extraConcessionalThisFy).toBeCloseTo(12_000, 0);
   });
 
   it("maps old concessionalUsedThisFy onto extra concessional", () => {
     const h = mergeHousehold(defaultHousehold(), {
       you: { concessionalUsedThisFy: 12_000 },
     } as Partial<Household>);
-    expect(h.you.extraConcessionalThisFy).toBe(12_000);
+    expect(h.you.extraConcessionalThisFy).toBeCloseTo(12_000, 0);
     expect(h.you.employerSgThisFy).toBe(0);
     expect(
       (h.you as { concessionalUsedThisFy?: number }).concessionalUsedThisFy,
@@ -215,7 +230,7 @@ describe("day-one identity (0% rates)", () => {
 });
 
 describe("debt recycle deduction", () => {
-  it("beats buying in your name when the loan rate is positive and assets are flat", () => {
+  it("costs the after-tax interest rate when the loan rate is positive and assets are flat", () => {
     const h = hush({
       loan: {
         balance: 650_000,
@@ -234,10 +249,13 @@ describe("debt recycle deduction", () => {
       h,
       def("r", { debt_recycle_you_growth: h.lumpSum }),
     );
-    expect(recycle.netWealth).toBeGreaterThan(invest.netWealth);
-    // Roughly lump * rate * MTR * years, refunds compounding in offset at 0%.
-    const rough = h.lumpSum * 0.06 * combinedMarginalRate(h.you) * 10;
-    expect(recycle.netWealth - invest.netWealth).toBeGreaterThan(rough * 0.8);
+    // Paying 6% to hold a 0%-return asset is a loss even after the
+    // deduction — the ATO refunds at most your marginal rate, never the
+    // whole dollar of interest.
+    expect(recycle.netWealth).toBeLessThan(invest.netWealth);
+    // Roughly lump * rate * (1 - MTR) * years, net cost after the deduction.
+    const rough = h.lumpSum * 0.06 * (1 - combinedMarginalRate(h.you)) * 10;
+    expect(invest.netWealth - recycle.netWealth).toBeGreaterThan(rough * 0.8);
   });
 
   it("values the interest deduction on the tax scale, not a flat 47%", () => {
@@ -265,8 +283,12 @@ describe("debt recycle deduction", () => {
     );
     const yearlyInterest = h.lumpSum * 0.06;
     const yearlySave = -taxDelta(193_000, -yearlyInterest, 0.02);
-    const gap = recycle.netWealth - invest.netWealth;
-    expect(gap).toBeCloseTo(yearlySave * 10, 0);
+    const yearlyNetCost = yearlyInterest - yearlySave;
+    const gap = invest.netWealth - recycle.netWealth;
+    expect(gap).toBeCloseTo(yearlyNetCost * 10, 0);
+    // The save is on the progressive scale, not a flat 47c in the dollar —
+    // so it recovers less than 47% of the raw interest, leaving a bigger
+    // net cost than a flat-rate refund would.
     expect(yearlySave).toBeLessThan(yearlyInterest * 0.47);
   });
 });
@@ -583,8 +605,9 @@ describe("income growth", () => {
   it("adds grown work super each year after fund tax", () => {
     const h = hush({
       you: defaultPerson("you", {
-        employerSgThisFy: 10_000,
-        extraConcessionalThisFy: 0,
+        salary: 10_000 / 0.12,
+        sgRatePercent: 12,
+        extraConcessionalFortnightly: 0,
         taxableIncome: 100_000,
       }),
       assumptions: defaultAssumptions({

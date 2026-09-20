@@ -88,33 +88,26 @@ export function daysBetweenIso(from: string, to: string): number {
   return Math.floor((b - a) / (1000 * 60 * 60 * 24));
 }
 
+/**
+ * Add calendar months, clamping the day to the end of a shorter target
+ * month (e.g. Jan 31 + 1 month = Feb 28, not a rollover into March).
+ */
 export function addMonthsIso(iso: string, months: number): string {
   const [y, m, d] = iso.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1 + months, d));
-  const yy = dt.getUTCFullYear();
-  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(dt.getUTCDate()).padStart(2, "0");
-  return `${yy}-${mm}-${dd}`;
+  const totalMonths = y * 12 + (m - 1) + months;
+  const ty = Math.floor(totalMonths / 12);
+  const tm = totalMonths - ty * 12;
+  const daysInTargetMonth = new Date(Date.UTC(ty, tm + 1, 0)).getUTCDate();
+  const td = Math.min(d, daysInTargetMonth);
+  const mm = String(tm + 1).padStart(2, "0");
+  const dd = String(td).padStart(2, "0");
+  return `${ty}-${mm}-${dd}`;
 }
 
 export function frankingCredits(cashAud: number, frankingPercent: number): number {
   const f = Math.max(0, Math.min(100, frankingPercent)) / 100;
   if (cashAud <= 0 || f <= 0) return 0;
   return cashAud * f * (COMPANY_TAX_RATE / (1 - COMPANY_TAX_RATE));
-}
-
-/**
- * Net tax on a cash dividend after franking offset (refundable if negative).
- */
-export function dividendTax(
-  cashAud: number,
-  frankingPercent: number,
-  person: Pick<Person, "taxableIncome" | "medicareLevy">,
-): number {
-  if (cashAud <= 0) return 0;
-  const credits = frankingCredits(cashAud, frankingPercent);
-  const assessable = cashAud + credits;
-  return taxDelta(person.taxableIncome, assessable, person.medicareLevy) - credits;
 }
 
 export type HybridCgtInput = {
