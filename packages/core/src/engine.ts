@@ -32,6 +32,7 @@ import {
   type RunReport,
   type ScenarioDef,
   type ScenarioResult,
+  type MonthRow,
   type YearRow,
 } from "./types.js";
 
@@ -215,6 +216,11 @@ export function runScenario(
     cash: 0,
   };
 
+  // New cash actually moved into taxable investments since the last MonthRow
+  // was pushed — the lump's initial placement, a debt-recycle redraw, or an
+  // idle-offset sweep. Not DRP reinvestment, which is automatic.
+  let periodInvested = 0;
+
   const addSleeve = (
     amount: number,
     sleeve: AssetSleeve,
@@ -241,6 +247,7 @@ export function runScenario(
     state.homeLoan -= pay;
     state.invLoan += pay;
     addSleeve(pay, sleeve, household.you, start);
+    periodInvested += pay;
     if (amount > pay) {
       const shortfall = amount - pay;
       state.offset += shortfall;
@@ -262,6 +269,11 @@ export function runScenario(
   addSleeve(applied.taxable_you_income ?? 0, a.incomeAsset, household.you, start);
   addSleeve(applied.taxable_spouse_growth ?? 0, a.growthAsset, household.spouse, start);
   addSleeve(applied.taxable_spouse_income ?? 0, a.incomeAsset, household.spouse, start);
+  periodInvested +=
+    (applied.taxable_you_growth ?? 0) +
+    (applied.taxable_you_income ?? 0) +
+    (applied.taxable_spouse_growth ?? 0) +
+    (applied.taxable_spouse_income ?? 0);
   placeDebtRecycle(applied.debt_recycle_you_growth ?? 0, a.growthAsset);
   placeDebtRecycle(applied.debt_recycle_you_income ?? 0, a.incomeAsset);
 
@@ -327,9 +339,15 @@ export function runScenario(
 
   const sweepIdleOffset = (acquiredDate: string) => {
     if (!a.sweepIdleOffset) return;
-    const idle = state.offset - state.homeLoan - restrictedOffset;
+    // Only the restricted floor is protected — this sweeps past the home
+    // loan balance too, trading the guaranteed home-loan-rate interest
+    // save for the sleeve's (uncertain) return. The loan still pays down
+    // slower as a result: stepHomeLoan charges real interest on whatever
+    // of it stops being offset.
+    const idle = state.offset - restrictedOffset;
     if (idle <= 0.5) return;
     state.offset -= idle;
+    periodInvested += idle;
     const existing = state.sleeves.find(
       (s) => s.person.id === "spouse" && s.sleeve === a.growthAsset,
     );
@@ -348,6 +366,7 @@ export function runScenario(
   let totalIncomeTax = 0;
   let totalInvestmentIncomeTax = 0;
   const years: YearRow[] = [];
+  const monthRows: MonthRow[] = [];
 
   const fillAccessible = () => {
     const taxableTotal = state.sleeves.reduce((s, x) => s + sleeveValue(x), 0);
@@ -570,6 +589,24 @@ export function runScenario(
     else state.cash -= netTax;
     sweepIdleOffset(date);
 
+    const monthSnap = fillAccessible();
+    monthRows.push({
+      month: m + 1,
+      year: yearIndex + 1,
+      netWealth: round2(monthSnap.netWealth),
+      superTotal: round2(monthSnap.superTotal),
+      taxableTotal: round2(monthSnap.taxableTotal),
+      homeLoan: round2(monthSnap.homeLoan),
+      investmentLoan: round2(monthSnap.investmentLoan),
+      offset: round2(monthSnap.offset),
+      cash: round2(monthSnap.cash),
+      invested: round2(periodInvested),
+      homeInterest: round2(home.interest),
+      investmentInterest: round2(invInterest),
+      incomeTax: round2(netTax),
+    });
+    periodInvested = 0;
+
     if ((m + 1) % 12 === 0 || m === months - 1) {
       const year = Math.ceil((m + 1) / 12);
       const snap = fillAccessible();
@@ -665,6 +702,7 @@ export function runScenario(
     exitCgtIfLegacyDiscount: round2(exitCgtIfLegacy),
     totalCapitalIn: round2(household.lumpSum),
     years,
+    months: monthRows,
   };
 }
 

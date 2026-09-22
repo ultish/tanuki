@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Area,
@@ -20,6 +20,7 @@ import {
   type Explainer,
   type Household,
   type Meta,
+  type MonthRow,
   type Person,
   type RunReport,
   type ScenarioResult,
@@ -631,7 +632,7 @@ function HouseholdForm({
 
       <div className="section">
         <h3>
-          <Tip text="Once offset is bigger than the home loan, extra dollars save no more interest. The split is not offset. This buys growth shares in your spouse's name with that idle cash. No extra loan.">
+          <Tip text="Above the restricted floor (or zero if you haven't set one), offset cash keeps buying growth shares even while the home loan still has a balance — trading the guaranteed home-loan-rate interest save for the sleeve's return instead. The loan pays down slower as a result, since less of it is offset. The split itself is not offset.">
             Idle offset
           </Tip>
         </h3>
@@ -641,8 +642,8 @@ function HouseholdForm({
             checked={h.assumptions.sweepIdleOffset !== false}
             onChange={(e) => setA({ sweepIdleOffset: e.target.checked })}
           />
-          <Tip text="Each month, offset above the home balance buys growth shares in your spouse's name. Unlevered. You can turn this off to leave the cash in the offset.">
-            Invest offset above the home loan
+          <Tip text="Each month, offset above the restricted floor buys growth shares in your spouse's name, even if that's below the home loan balance. Unlevered. Turn this off to leave the cash sitting in the offset instead.">
+            Invest offset above the restricted floor
           </Tip>
         </label>
       </div>
@@ -1197,6 +1198,229 @@ function putLine(a: Record<string, number>): string {
     .join("  ·  ");
 }
 
+const EXECUTION_TIP: Partial<Record<string, string>> = {
+  offset:
+    "A transfer into your existing offset account — usually lands same-day.",
+  extra_repay:
+    "A lump-sum payment straight to the loan. If it's fixed-rate, check for break costs or an annual extra-repayment limit first.",
+  debt_recycle_you_growth:
+    "Ask your lender to split the loan into a separate sub-account for the redraw — keep it entirely apart from the home portion so the interest is traceable for the ATO. Buy the shares within a few days of the redraw landing, and keep the records.",
+  debt_recycle_you_income:
+    "Same split-loan approach as the growth version — a separate sub-account, shares bought promptly after the redraw lands.",
+  super_cc_you:
+    "Transfer to your fund, then lodge a Notice of Intent to Claim a Deduction with them before you lodge your tax return (and before the end of the next FY) — no notice, no deduction.",
+  super_cc_spouse:
+    "Same as above — transfer to their fund, then they lodge the Notice of Intent with it.",
+  super_ncc_you:
+    "A plain after-tax transfer to your fund. No notice of intent needed, but double-check your total super balance is still under the non-concessional limit first.",
+  super_ncc_spouse:
+    "Same as above, into their fund.",
+  taxable_you_growth: "Buy through your usual brokerage, in your name.",
+  taxable_you_income: "Buy through your usual brokerage, in your name.",
+  taxable_spouse_growth:
+    "Buy through your usual brokerage, in your spouse's name — the shares are legally theirs from here.",
+  taxable_spouse_income:
+    "Buy through your usual brokerage, in your spouse's name.",
+};
+
+/**
+ * Crude "when does this compounding figure first pass a threshold" — same
+ * growth-rate math the engine itself uses for ongoing SG/salary-sacrifice,
+ * done client-side so the plan doesn't need a new engine export.
+ */
+function projectedCrossYear(
+  amount: number,
+  threshold: number,
+  growth: number,
+  horizon: number,
+): number | null {
+  if (amount <= 0 || threshold <= 0) return null;
+  if (amount >= threshold) return 0;
+  if (growth <= 0) return null;
+  const years = Math.ceil(Math.log(threshold / amount) / Math.log(1 + growth));
+  return years >= 1 && years <= horizon ? years : null;
+}
+
+function capWarnings(h: Household): string[] {
+  const out: string[] = [];
+  const growth = h.assumptions.incomeGrowthRate ?? 0;
+  const horizon = h.assumptions.horizonYears;
+  const cap = h.assumptions.concessionalCap;
+  const div293 = h.assumptions.div293Threshold;
+  for (const [label, p] of [
+    ["You", h.you],
+    ["Spouse", h.spouse],
+  ] as const) {
+    const committed = p.employerSgThisFy + p.extraConcessionalThisFy;
+    const capYear = projectedCrossYear(committed, cap, growth, horizon);
+    if (capYear != null) {
+      out.push(
+        capYear === 0
+          ? `${label}: ongoing super guarantee + salary sacrifice is already over the $${Math.round(cap).toLocaleString("en-AU")} concessional cap. The excess still lands in super, just taxed at marginal rate as well as the fund's 15% — worth trimming salary sacrifice.`
+          : `${label}: around year ${capYear}, ongoing super guarantee + salary sacrifice is projected to pass the $${Math.round(cap).toLocaleString("en-AU")} concessional cap (income growth compounding it over time). Worth revisiting salary sacrifice before then.`,
+      );
+    }
+    const combined = p.taxableIncome + committed;
+    const div293Year = projectedCrossYear(combined, div293, growth, horizon);
+    if (div293Year != null) {
+      out.push(
+        div293Year === 0
+          ? `${label}: income plus super contributions is already over the $${Math.round(div293).toLocaleString("en-AU")} Division 293 threshold — an extra 15% applies to contributions above that point.`
+          : `${label}: around year ${div293Year}, income plus super contributions is projected to pass the $${Math.round(div293).toLocaleString("en-AU")} Division 293 threshold. An extra 15% applies to contributions above that point from then on.`,
+      );
+    }
+  }
+  return out;
+}
+
+function yearInvested(months: MonthRow[], year: number): number {
+  return months
+    .filter((m) => m.year === year)
+    .reduce((s, m) => s + m.invested, 0);
+}
+
+function HowToDoIt({
+  selected,
+  household,
+}: {
+  selected: ScenarioResult;
+  household: Household;
+}) {
+  const steps = allocationParts(selected.appliedAllocation);
+  const warnings = capWarnings(household);
+  const invRate = household.assumptions.investmentLoanRate ?? household.loan.annualRate;
+  const monthlyInvInterest = (selected.investmentLoan * invRate) / 12;
+  const [openYear, setOpenYear] = useState<number | null>(null);
+
+  return (
+    <details className="assumptions plan">
+      <summary>
+        <Tip text="A concrete, step-by-step version of the split above — what to actually do, this month and every month after, to run this scenario.">
+          How to actually do this
+        </Tip>
+      </summary>
+
+      <h4>Step one — this month</h4>
+      <ol className="plan-steps">
+        {steps.map((s) => {
+          const meta = LUMP_BUCKETS[s.id];
+          const tip = EXECUTION_TIP[s.id];
+          return (
+            <li key={s.id}>
+              <span className="lump-amt">{money(s.amount)}</span>{" "}
+              {meta ? meta.what : s.id}.
+              {tip ? <span className="plan-tip"> {tip}</span> : null}
+            </li>
+          );
+        })}
+      </ol>
+
+      <h4>Every pay cycle after that</h4>
+      <p className="plan-rhythm">
+        Nothing above changes what already comes out of your pay. Employer
+        SG ({money(household.you.employerSgThisFy / 26)}/fortnight) and
+        salary sacrifice (
+        {money(household.you.extraConcessionalFortnightly)}/fortnight)
+        keep going as they already do
+        {household.spouse.employerSgThisFy > 1 ||
+        household.spouse.extraConcessionalFortnightly > 1
+          ? " for both of you"
+          : ""}
+        .
+        {selected.investmentLoan > 1
+          ? ` The new investment loan accrues about ${money(monthlyInvInterest)}/month in interest at the current rate — deductible against salary, not paid separately by hand.`
+          : ""}
+        {(selected.appliedAllocation.super_cc_you ?? 0) > 1 ||
+        (selected.appliedAllocation.super_cc_spouse ?? 0) > 1
+          ? household.assumptions.refundsToOffset
+            ? " Any tax refund from this year's super contribution lands in the offset automatically at tax time, not as a lump cheque."
+            : " Any tax refund from this year's super contribution shows up as cash at tax time, not swept into the offset (refunds-to-offset is off in your assumptions)."
+          : ""}
+      </p>
+
+      {warnings.length ? (
+        <>
+          <h4>Watch for</h4>
+          <ul className="warn-list">
+            {warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+
+      <h4>Year by year</h4>
+      <p className="plan-tip">Click a year to break it down by month.</p>
+      <div className="plan-table-wrap">
+        <table className="plan-table">
+          <thead>
+            <tr>
+              <th>Year</th>
+              <th>Invested</th>
+              <th>Home loan</th>
+              <th>Investment loan</th>
+              <th>Offset</th>
+              <th>Super</th>
+              <th>Shares outside super</th>
+              <th>Net wealth</th>
+            </tr>
+          </thead>
+          <tbody>
+            {selected.years.map((y) => {
+              const monthsForYear = selected.months.filter(
+                (m) => m.year === y.year,
+              );
+              const isOpen = openYear === y.year && monthsForYear.length > 0;
+              return (
+                <Fragment key={y.year}>
+                  <tr
+                    className={monthsForYear.length ? "plan-year-row" : ""}
+                    onClick={
+                      monthsForYear.length
+                        ? () => setOpenYear(isOpen ? null : y.year)
+                        : undefined
+                    }
+                  >
+                    <td>
+                      {monthsForYear.length ? (isOpen ? "▾ " : "▸ ") : ""}
+                      {y.year === 0 ? "Now" : y.year}
+                    </td>
+                    <td>
+                      {y.year === 0
+                        ? "—"
+                        : money(yearInvested(selected.months, y.year))}
+                    </td>
+                    <td>{money(y.homeLoan)}</td>
+                    <td>{money(y.investmentLoan)}</td>
+                    <td>{money(y.offset)}</td>
+                    <td>{money(y.superTotal)}</td>
+                    <td>{money(y.taxableTotal)}</td>
+                    <td>{money(y.netWealth)}</td>
+                  </tr>
+                  {isOpen
+                    ? monthsForYear.map((mo) => (
+                        <tr key={mo.month} className="plan-month-row">
+                          <td>Month {((mo.month - 1) % 12) + 1}</td>
+                          <td>{money(mo.invested)}</td>
+                          <td>{money(mo.homeLoan)}</td>
+                          <td>{money(mo.investmentLoan)}</td>
+                          <td>{money(mo.offset)}</td>
+                          <td>{money(mo.superTotal)}</td>
+                          <td>{money(mo.taxableTotal)}</td>
+                          <td>{money(mo.netWealth)}</td>
+                        </tr>
+                      ))
+                    : null}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  );
+}
+
 function Detail({
   selected,
   household,
@@ -1323,6 +1547,7 @@ function Detail({
           ))}
         </ul>
       ) : null}
+      <HowToDoIt selected={selected} household={household} />
     </section>
   );
 }

@@ -60,6 +60,7 @@ export {
   type BucketId,
   type Household,
   type Loan,
+  type MonthRow,
   type Person,
   type PersonId,
   type RunReport,

@@ -182,6 +182,30 @@ export type YearRow = {
   cgtTax: number;
 };
 
+/**
+ * One simulated month — the same balances as YearRow, at monthly grain, plus
+ * `invested`: new cash actually moved into taxable investments that month
+ * (the initial lump placement folded into month 1, plus any idle-offset
+ * sweep). Does not include DRP reinvestment — that's automatic, not an
+ * action anyone takes.
+ */
+export type MonthRow = {
+  month: number;
+  /** Which YearRow.year this month rolls into (1-based; month 1..12 -> year 1). */
+  year: number;
+  netWealth: number;
+  superTotal: number;
+  taxableTotal: number;
+  homeLoan: number;
+  investmentLoan: number;
+  offset: number;
+  cash: number;
+  invested: number;
+  homeInterest: number;
+  investmentInterest: number;
+  incomeTax: number;
+};
+
 export type ScenarioResult = {
   id: string;
   label: string;
@@ -224,6 +248,7 @@ export type ScenarioResult = {
   exitCgtIfLegacyDiscount: number;
   totalCapitalIn: number;
   years: YearRow[];
+  months: MonthRow[];
 };
 
 export type RunReport = {

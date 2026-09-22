@@ -182,6 +182,9 @@ describe("day-one identity (0% rates)", () => {
         remainingYears: 25,
         interestOnly: true,
       },
+      // Idle-offset sweep is covered separately below; keep it off here so
+      // it doesn't disturb the debt-recycle mechanics this test is about.
+      assumptions: defaultAssumptions({ ...zeroMarket, sweepIdleOffset: false }),
     });
     const r = runScenario(h, def("r", { debt_recycle_you_growth: 250_000 }));
     expect(r.homeLoan).toBeCloseTo(150_000, 0);
@@ -200,7 +203,12 @@ describe("day-one identity (0% rates)", () => {
   });
 
   it("offset and extra-repay match net wealth and net debt", () => {
-    const h = hush();
+    // Sweep off — with it on, both scenarios sweep their offset down to the
+    // same restricted floor regardless of the (different) loan balances
+    // left behind, which is a separate thing to test, not what this checks.
+    const h = hush({
+      assumptions: defaultAssumptions({ ...zeroMarket, sweepIdleOffset: false }),
+    });
     const a = runScenario(h, def("off", { offset: h.lumpSum }));
     const b = runScenario(h, def("pay", { extra_repay: h.lumpSum }));
     expect(a.netWealth).toBeCloseTo(b.netWealth, 0);
@@ -341,6 +349,9 @@ describe("taxable name split", () => {
       assumptions: defaultAssumptions({
         ...zeroMarket,
         investmentLoanRate: 0.06,
+        // Off so swept offset cash doesn't inflate investmentOutsideSuper —
+        // this test is about the recycled amount specifically.
+        sweepIdleOffset: false,
         incomeAsset: {
           label: "yield",
           growthRate: 0,
@@ -505,7 +516,7 @@ describe("NCC bring-forward TSB bands", () => {
 });
 
 describe("idle offset sweep", () => {
-  it("buys unlevered spouse growth with offset above the home loan", () => {
+  it("buys unlevered spouse growth with offset above the restricted floor", () => {
     const h = hush({
       loan: {
         balance: 100_000,
@@ -522,8 +533,10 @@ describe("idle offset sweep", () => {
     const r = runScenario(h, def("o", { offset: h.lumpSum }));
     expect(r.investmentLoan).toBe(0);
     expect(r.homeLoan).toBeCloseTo(100_000, 0);
-    expect(r.offset).toBeCloseTo(100_000, 0);
-    expect(r.taxableSpouse).toBeCloseTo(180_000 + h.lumpSum - 100_000, 0);
+    // No restriction set, so the sweep takes it all the way to zero — even
+    // below the still-outstanding home loan balance.
+    expect(r.offset).toBeCloseTo(0, 0);
+    expect(r.taxableSpouse).toBeCloseTo(180_000 + h.lumpSum, 0);
     expect(r.taxableYou).toBe(0);
   });
 });
@@ -575,17 +588,18 @@ describe("restricted offset (not yours)", () => {
       assumptions: defaultAssumptions({ ...zeroMarket, sweepIdleOffset: true }),
     });
     const r = runScenario(h, def("o", { offset: h.lumpSum }));
-    // idle = offset(180k+250k) - homeLoan(100k) - restricted(60k) = 270k swept,
-    // leaving homeLoan(100k) + restricted(60k) = 160k sitting in offset.
-    expect(r.offset).toBeCloseTo(160_000, 0);
-    expect(r.taxableSpouse).toBeCloseTo(180_000 + h.lumpSum - 160_000, 0);
+    // idle = offset(180k+250k) - restricted(60k) = 370k swept, leaving
+    // exactly the restricted 60k sitting in offset — the home loan balance
+    // (100k) is no longer a floor.
+    expect(r.offset).toBeCloseTo(60_000, 0);
+    expect(r.taxableSpouse).toBeCloseTo(180_000 + h.lumpSum - 60_000, 0);
   });
 
-  it("fully protects idle cash when the restriction alone exceeds offset above the loan", () => {
+  it("protects idle cash when offset is at or below the restricted floor", () => {
     const h = hush({
       loan: {
         balance: 100_000,
-        offset: 120_000,
+        offset: 40_000,
         annualRate: 0,
         remainingYears: 25,
         interestOnly: true,
@@ -593,11 +607,11 @@ describe("restricted offset (not yours)", () => {
       },
       assumptions: defaultAssumptions({ ...zeroMarket, sweepIdleOffset: true }),
     });
-    // offset(120k) - homeLoan(100k) = 20k "idle" by the old math, but all of it
-    // is protected by the 50k restriction, so nothing should sweep.
+    // offset (40k) is under the restriction (50k) even before the lump —
+    // empty allocation, so nothing should sweep.
     const r = runScenario(h, def("o", {}));
     expect(r.taxableSpouse).toBe(0);
-    expect(r.offset).toBeCloseTo(120_000, 0);
+    expect(r.offset).toBeCloseTo(40_000, 0);
   });
 });
 

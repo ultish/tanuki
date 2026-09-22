@@ -560,6 +560,84 @@ details.assumptions summary {
   background: var(--paper);
 }
 
+details.plan h4 {
+  margin: 0.9rem 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--indigo);
+}
+
+details.plan h4:first-of-type {
+  margin-top: 0.6rem;
+}
+
+.plan-steps {
+  margin: 0;
+  padding-left: 1.3rem;
+  font-size: 0.9rem;
+}
+
+.plan-steps li {
+  margin-bottom: 0.4rem;
+}
+
+.plan-tip {
+  color: var(--muted);
+}
+
+.plan-rhythm {
+  font-size: 0.9rem;
+  color: var(--ink);
+  margin: 0;
+}
+
+.plan-table-wrap {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+}
+
+.plan-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.82rem;
+}
+
+.plan-table th {
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  border-bottom: 1px solid var(--ink);
+  padding: 0.25rem 0.4rem;
+  position: sticky;
+  top: 0;
+  background: var(--paper);
+}
+
+.plan-table td {
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.plan-year-row {
+  cursor: pointer;
+}
+
+.plan-year-row:hover td {
+  background: var(--line);
+}
+
+.plan-month-row td {
+  color: var(--muted);
+  padding-left: 1.1rem;
+}
+
+.plan-month-row td:first-child {
+  padding-left: 1.6rem;
+}
+
 .mix-sheet {
   margin-top: 1.35rem;
   background-color: #edf2ee;

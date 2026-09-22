@@ -84,6 +84,22 @@ export type YearRow = {
   cgtTax: number;
 };
 
+export type MonthRow = {
+  month: number;
+  year: number;
+  netWealth: number;
+  superTotal: number;
+  taxableTotal: number;
+  homeLoan: number;
+  investmentLoan: number;
+  offset: number;
+  cash: number;
+  invested: number;
+  homeInterest: number;
+  investmentInterest: number;
+  incomeTax: number;
+};
+
 export type ScenarioResult = {
   id: string;
   label: string;
@@ -114,6 +130,7 @@ export type ScenarioResult = {
   exitCgtIfLegacyDiscount: number;
   totalCapitalIn: number;
   years: YearRow[];
+  months: MonthRow[];
 };
 
 export type RunReport = {
