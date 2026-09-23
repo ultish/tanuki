@@ -12,6 +12,7 @@ export {
   defaultAssumptions,
   defaultHousehold,
   defaultPerson,
+  leaseAddback,
   mergeHousehold,
 } from "./defaults.js";
 export {

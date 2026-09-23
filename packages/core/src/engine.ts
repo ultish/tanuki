@@ -4,6 +4,7 @@ import {
   nccRoom,
   remainingAfter,
 } from "./caps.js";
+import { leaseAddback } from "./defaults.js";
 import { pmt, stepHomeLoan } from "./loan.js";
 import { buildPresets } from "./presets.js";
 import {
@@ -16,6 +17,7 @@ import {
   division293Tax,
   estimateHybridCgt,
   frankingCredits,
+  incomeTax,
   monthlyRate,
   round2,
   taxDelta,
@@ -68,6 +70,8 @@ type SleeveState = {
   lots: Lot[];
   sleeve: AssetSleeve;
   person: Person;
+  /** Yield earned but not yet distributed — paid out on the fund's schedule. */
+  accruedYield: number;
 };
 
 function sleeveValue(sl: SleeveState): number {
@@ -198,7 +202,7 @@ export function runScenario(
   const start = a.startDate;
   const invRate = a.investmentLoanRate ?? household.loan.annualRate;
   const restrictedOffset = Math.max(0, household.loan.restrictedOffset ?? 0);
-  const scheduled =
+  const fullRepayment =
     household.loan.monthlyRepayment ??
     pmt(
       household.loan.balance,
@@ -216,10 +220,16 @@ export function runScenario(
     cash: 0,
   };
 
+  const minimumCash = Math.max(0, a.minimumCash);
+  const holidayMonth = Math.min(12, Math.max(1, Math.round(a.holidayMonth)));
+
   // New cash actually moved into taxable investments since the last MonthRow
   // was pushed — the lump's initial placement, a debt-recycle redraw, or an
   // idle-offset sweep. Not DRP reinvestment, which is automatic.
   let periodInvested = 0;
+  // The slice of periodInvested that came out of the offset (the idle sweep)
+  // rather than straight from the lump — the offset's side of the ledger.
+  let periodSweptFromOffset = 0;
 
   const addSleeve = (
     amount: number,
@@ -232,6 +242,7 @@ export function runScenario(
       lots: [{ acquiredDate, cost: amount, value: amount, valueAtCutover: null }],
       sleeve,
       person,
+      accruedYield: 0,
     });
   };
 
@@ -277,6 +288,31 @@ export function runScenario(
   placeDebtRecycle(applied.debt_recycle_you_growth ?? 0, a.growthAsset);
   placeDebtRecycle(applied.debt_recycle_you_income ?? 0, a.incomeAsset);
 
+  // Splitting the loan re-sizes the repayment: the bank sets up two
+  // facilities, and the home one is re-amortised over the balance actually
+  // left on it. Only the split does this — an extra repayment leaves the
+  // payment alone and just finishes the loan early, which is what banks do
+  // unless you specifically ask them to recast. pmt is linear in principal,
+  // so scaling covers both a computed repayment and one entered by hand.
+  const recycled = state.invLoan;
+  const scheduled =
+    household.loan.balance > 0
+      ? fullRepayment *
+        (Math.max(0, household.loan.balance - recycled) /
+          household.loan.balance)
+      : fullRepayment;
+
+  const incomeGrowth = a.incomeGrowthRate ?? 0;
+
+  const grownIncome = (person: Person, yearIndex: number): number =>
+    person.taxableIncome * Math.pow(1 + incomeGrowth, yearIndex) +
+    leaseAddback(person, start, yearIndex);
+
+  // Standard PAYG on salary alone — ignores deductions/offsets from other
+  // income, same simplification as the "Spare cash" plan panel uses.
+  const afterTaxIncome = (income: number, medicareLevy: number): number =>
+    income - incomeTax(income, medicareLevy);
+
   /**
    * Extra tax on top of the fund's flat 15%, for a concessional contribution
    * arriving this year: Division 293 above the income threshold, and
@@ -311,10 +347,17 @@ export function runScenario(
     return excessTax + div293;
   };
 
+  // Net tax settlement accrued but not yet "received" — flushed to
+  // offset/cash once a year, at the 1 Jul FY rollover (see the main loop),
+  // rather than smoothed into every month. Matches how a real refund or
+  // Division 293/excess-contributions bill actually arrives.
+  let fyTaxAccrual = 0;
+
   const contributeCc = (person: Person, amount: number) => {
+    const incomeNow = grownIncome(person, 0);
     const extraTax = concessionalExtraTax(
       person,
-      person.taxableIncome,
+      incomeNow,
       concessionalCommittedThisFy(person),
       amount,
     );
@@ -323,12 +366,9 @@ export function runScenario(
       const intoFund = amount * (1 - a.concessionalContributionsTax);
       if (person.id === "you") state.superYou += intoFund;
       else state.superSpouse += intoFund;
-      netRefund += -taxDelta(person.taxableIncome, -amount, person.medicareLevy);
+      netRefund += -taxDelta(incomeNow, -amount, person.medicareLevy);
     }
-    if (netRefund !== 0) {
-      if (a.refundsToOffset) state.offset += netRefund;
-      else state.cash += netRefund;
-    }
+    fyTaxAccrual += netRefund;
     return netRefund;
   };
 
@@ -337,17 +377,36 @@ export function runScenario(
   state.superYou += applied.super_ncc_you ?? 0;
   state.superSpouse += applied.super_ncc_spouse ?? 0;
 
-  const sweepIdleOffset = (acquiredDate: string) => {
+  /**
+   * Money already set aside for the next holiday — a sinking fund that
+   * fills a twelfth at a time and empties when the trip is paid for. Held
+   * on top of the cash buffer rather than out of it, so a holiday spends
+   * what was saved for it instead of raiding the emergency money.
+   */
+  const holidayProvisionFor = (iso: string): number => {
+    if (a.annualHolidaySpend <= 0) return 0;
+    const monthsSaving = (Number(iso.slice(5, 7)) - holidayMonth + 12) % 12;
+    return a.annualHolidaySpend * (monthsSaving / 12);
+  };
+
+  const sweepIdleOffset = (acquiredDate: string, holidayProvision = 0) => {
     if (!a.sweepIdleOffset) return;
-    // Only the restricted floor is protected — this sweeps past the home
-    // loan balance too, trading the guaranteed home-loan-rate interest
-    // save for the sleeve's (uncertain) return. The loan still pays down
-    // slower as a result: stepHomeLoan charges real interest on whatever
-    // of it stops being offset.
-    const idle = state.offset - restrictedOffset;
+    // Floor is whichever protects more right now: enough to fully offset
+    // the home loan (so no home-loan interest is being paid), or the money
+    // that has to stay liquid — restricted offset, the everyday cash
+    // buffer, and whatever's saved toward the next holiday. Not the two
+    // rules added together, since money sitting in the account already
+    // counts toward offsetting the loan. Once the loan is smaller than what
+    // must stay liquid (or paid off), that's the floor.
+    const offsetTarget = Math.max(state.homeLoan, restrictedOffset + minimumCash);
+    const floor = a.holidayFundOnTop
+      ? offsetTarget + holidayProvision
+      : Math.max(state.homeLoan, restrictedOffset + minimumCash + holidayProvision);
+    const idle = state.offset - floor;
     if (idle <= 0.5) return;
     state.offset -= idle;
     periodInvested += idle;
+    periodSweptFromOffset += idle;
     const existing = state.sleeves.find(
       (s) => s.person.id === "spouse" && s.sleeve === a.growthAsset,
     );
@@ -357,7 +416,7 @@ export function runScenario(
       addSleeve(idle, a.growthAsset, household.spouse, acquiredDate);
     }
   };
-  sweepIdleOffset(start);
+  sweepIdleOffset(start, holidayProvisionFor(start));
 
   const superM = monthlyRate(a.superReturnRate) * (1 - a.superEarningsTax);
 
@@ -407,21 +466,27 @@ export function runScenario(
     restrictedOffset: round2(day0.restrictedOffset),
     netDebt: round2(day0.netDebt),
     homeInterest: 0,
+    homeLoanPayment: 0,
     investmentInterest: 0,
     incomeTax: 0,
     cgtTax: 0,
+    offsetContribution: 0,
+    holidaySpend: 0,
+    spareCash: 0,
+    afterTaxPay: 0,
   });
 
   let yearHomeInterest = 0;
+  let yearHomePayment = 0;
   let yearInvInterest = 0;
   let yearIncomeTax = 0;
+  let yearOffsetContribution = 0;
+  let yearHolidaySpend = 0;
+  let yearSpareCash = 0;
+  let yearAfterTaxPay = 0;
 
-  const incomeGrowth = a.incomeGrowthRate ?? 0;
   const ccYou = applied.super_cc_you ?? 0;
   const ccSpouse = applied.super_cc_spouse ?? 0;
-
-  const grownIncome = (person: Person, yearIndex: number): number =>
-    person.taxableIncome * Math.pow(1 + incomeGrowth, yearIndex);
 
   // Ongoing SG + salary-sacrifice for the year, uncapped — it's compulsory
   // and is paid into the fund in full even past anyone's personal cap. The
@@ -497,11 +562,7 @@ export function runScenario(
         yearWorkConcessional(household.spouse, yearIndex),
         0,
       );
-      const extra = extraYou + extraSpouse;
-      if (extra > 0) {
-        if (a.refundsToOffset) state.offset -= extra;
-        else state.cash -= extra;
-      }
+      fyTaxAccrual -= extraYou + extraSpouse;
     }
 
     const home = stepHomeLoan({
@@ -514,23 +575,47 @@ export function runScenario(
     state.homeLoan = home.balance;
     totalHomeInterest += home.interest;
     yearHomeInterest += home.interest;
-    // P&I is assumed paid from salary. If the loan does not need the full
-    // scheduled amount (paid off, or last partial), the leftover still
-    // exists as household cashflow — park it in the offset so extra-repay
-    // gets credit for freeing the mortgage payment.
-    if (!household.loan.interestOnly) {
-      const surplus = Math.max(0, scheduled - home.payment);
-      if (surplus > 0) state.offset += surplus;
-    }
+    yearHomePayment += home.payment;
 
     const invInterest = state.invLoan * (invRate / 12);
     totalInvInterest += invInterest;
     yearInvInterest += invInterest;
-    // The deduction below only reduces tax owed; the interest itself still
-    // has to be paid, or it isn't a real deduction. Without this, a higher
-    // investment-loan rate manufactures a bigger "refund" with no offsetting
-    // cost, so debt recycling would never stop looking better as rates rise.
-    state.cash -= invInterest;
+
+    // After-tax pay into the pool. Spouse's pay only counts in if the
+    // household actually pools income for joint expenses/saving
+    // (pooledIncome) — some households pool the lump but not day-to-day pay.
+    const payThisYear =
+      afterTaxIncome(grownIncome(household.you, yearIndex), household.you.medicareLevy) +
+      (a.pooledIncome
+        ? afterTaxIncome(
+            grownIncome(household.spouse, yearIndex),
+            household.spouse.medicareLevy,
+          )
+        : 0);
+    const payThisMonth = payThisYear / 12;
+    yearAfterTaxPay += payThisMonth;
+
+    // A holiday (or similar lump discretionary cost) once a year, pinned to
+    // a calendar month rather than to the anniversary of whenever the plan
+    // happened to start.
+    const holidaySpendThisMonth =
+      Number(prevDate.slice(5, 7)) === holidayMonth ? a.annualHolidaySpend : 0;
+
+    // Everything the household earns and spends runs through the pool. The
+    // investment-loan interest has to actually be paid, not just deducted —
+    // otherwise a higher rate would manufacture a refund with no cost, and
+    // debt recycling would never stop looking better as rates rise.
+    const monthSpareCash =
+      payThisMonth -
+      home.payment -
+      invInterest -
+      a.monthlyExpenses -
+      holidaySpendThisMonth;
+    state.cash += monthSpareCash;
+    // Snapshot for the month's cash-flow breakdown: where the offset stood
+    // before anything this month touched it.
+    const offsetOpening = state.offset;
+    let dividendCash = 0;
 
     state.superYou *= 1 + superM;
     state.superSpouse *= 1 + superM;
@@ -546,16 +631,26 @@ export function runScenario(
       const g = monthlyRate(sl.sleeve.growthRate);
       const y = monthlyRate(sl.sleeve.yieldRate);
       const mer = monthlyRate(sl.sleeve.mer);
-      let yieldCash = 0;
       for (const lot of sl.lots) {
         lot.value *= 1 + g;
-        const lotYield = lot.value * y;
+        sl.accruedYield += lot.value * y;
         lot.value *= 1 - mer;
-        yieldCash += lotYield;
         if (crossedCutover && lot.valueAtCutover == null) {
           lot.valueAtCutover = lot.value;
         }
       }
+      // Yield accrues every month but only lands on the fund's schedule —
+      // a quarterly ETF pays three months at once, not a twelfth each
+      // month. The last month flushes whatever is still accrued so nothing
+      // is left stranded at the horizon.
+      const perYear = Math.min(12, Math.max(1, Math.round(sl.sleeve.distributionsPerYear)));
+      const everyNMonths = Math.round(12 / perYear);
+      const distributes =
+        (m + 1) % everyNMonths === 0 || m === months - 1;
+      if (!distributes) continue;
+      const yieldCash = sl.accruedYield;
+      sl.accruedYield = 0;
+      if (yieldCash <= 0) continue;
       if (sl.sleeve.reinvestDividends) {
         // A new parcel bought via DRP this month — dated now, not backdated
         // to when the rest of the sleeve was acquired, so exit CGT sees its
@@ -563,13 +658,12 @@ export function runScenario(
         addLot(sl, yieldCash, date);
       } else {
         state.cash += yieldCash;
+        dividendCash += yieldCash;
       }
-      if (yieldCash > 0) {
-        const credits = frankingCredits(yieldCash, sl.sleeve.frankingPercent);
-        const bucket = sl.person.id === "you" ? youYear : spouseYear;
-        bucket.assessable += yieldCash + credits;
-        bucket.franking += credits;
-      }
+      const credits = frankingCredits(yieldCash, sl.sleeve.frankingPercent);
+      const bucket = sl.person.id === "you" ? youYear : spouseYear;
+      bucket.assessable += yieldCash + credits;
+      bucket.franking += credits;
     }
 
     youYear.deductions += interestDeductionThisMonth;
@@ -585,14 +679,48 @@ export function runScenario(
       yearYieldTax("spouse", yearIndex, spouseYear);
     totalInvestmentIncomeTax += yieldTaxYtd - prevInvIncomeTax;
     prevInvIncomeTax = yieldTaxYtd;
-    if (a.refundsToOffset) state.offset -= netTax;
-    else state.cash -= netTax;
-    sweepIdleOffset(date);
+    fyTaxAccrual -= netTax;
+
+    // Settle the year's accrued tax position once, at the 1 Jul FY
+    // rollover — like a real PAYG-then-annual-return cycle, not smoothed
+    // into every month — or at the simulation's last month, so nothing
+    // accrued is left stranded unapplied.
+    const prevFyMonth = Number(prevDate.slice(5, 7));
+    const fyMonth = Number(date.slice(5, 7));
+    const crossedFyEnd = prevFyMonth !== 7 && fyMonth === 7;
+    let taxSettlement = 0;
+    if ((crossedFyEnd || m === months - 1) && fyTaxAccrual !== 0) {
+      taxSettlement = fyTaxAccrual;
+      if (a.refundsToOffset) state.offset += fyTaxAccrual;
+      else state.cash += fyTaxAccrual;
+      fyTaxAccrual = 0;
+    }
+
+    // The pool is a transit account — the offset is where the household's
+    // money actually lives, so the month's balance settles there either way.
+    // A surplus tops the offset up; a deficit (a big holiday outrunning that
+    // month's pay) is covered by it, which is what makes the offset the
+    // everyday account rather than the pool carrying a negative balance
+    // nobody actually owes. What happens to the money from there — sit
+    // against the loan or get invested — is sweepIdleOffset's call, and the
+    // cash buffer is a floor it respects.
+    let monthOffsetContribution = 0;
+    if (Math.abs(state.cash) > 0.005) {
+      monthOffsetContribution = round2(state.cash);
+      state.offset += monthOffsetContribution;
+      state.cash = 0;
+    }
+
+    sweepIdleOffset(date, holidayProvisionFor(prevDate));
 
     const monthSnap = fillAccessible();
     monthRows.push({
       month: m + 1,
       year: yearIndex + 1,
+      // The month this row covers, not the instant it closes — a row that
+      // runs 1 Jan to 1 Feb is January. `date` itself stays the closing
+      // instant, since that's what CGT and FY timing key off.
+      date: prevDate,
       netWealth: round2(monthSnap.netWealth),
       superTotal: round2(monthSnap.superTotal),
       taxableTotal: round2(monthSnap.taxableTotal),
@@ -602,10 +730,24 @@ export function runScenario(
       cash: round2(monthSnap.cash),
       invested: round2(periodInvested),
       homeInterest: round2(home.interest),
+      homeLoanPayment: round2(home.payment),
       investmentInterest: round2(invInterest),
       incomeTax: round2(netTax),
+      offsetContribution: monthOffsetContribution,
+      holidaySpend: round2(holidaySpendThisMonth),
+      spareCash: round2(monthSpareCash),
+      dividendCash: round2(dividendCash),
+      taxSettlement: round2(taxSettlement),
+      holidayReserved: round2(holidayProvisionFor(prevDate)),
+      offsetOpening: round2(offsetOpening),
+      investedFromOffset: round2(periodSweptFromOffset),
+      afterTaxPay: round2(payThisMonth),
     });
     periodInvested = 0;
+    periodSweptFromOffset = 0;
+    yearOffsetContribution += monthOffsetContribution;
+    yearHolidaySpend += holidaySpendThisMonth;
+    yearSpareCash += monthSpareCash;
 
     if ((m + 1) % 12 === 0 || m === months - 1) {
       const year = Math.ceil((m + 1) / 12);
@@ -623,13 +765,23 @@ export function runScenario(
         restrictedOffset: round2(snap.restrictedOffset),
         netDebt: round2(snap.netDebt),
         homeInterest: round2(yearHomeInterest),
+        homeLoanPayment: round2(yearHomePayment),
         investmentInterest: round2(yearInvInterest),
         incomeTax: round2(yearIncomeTax),
         cgtTax: 0,
+        offsetContribution: round2(yearOffsetContribution),
+        holidaySpend: round2(yearHolidaySpend),
+        spareCash: round2(yearSpareCash),
+        afterTaxPay: round2(yearAfterTaxPay),
       });
       yearHomeInterest = 0;
+      yearHomePayment = 0;
       yearInvInterest = 0;
       yearIncomeTax = 0;
+      yearOffsetContribution = 0;
+      yearHolidaySpend = 0;
+      yearSpareCash = 0;
+      yearAfterTaxPay = 0;
     }
   }
 

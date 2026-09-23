@@ -18,7 +18,7 @@ import {
   monthlyRate,
   taxDelta,
 } from "./tax.js";
-import type { Household, ScenarioDef } from "./types.js";
+import type { Assumptions, Household, ScenarioDef } from "./types.js";
 
 const zeroMarket = defaultAssumptions({
   startDate: "2026-09-01",
@@ -187,9 +187,12 @@ describe("day-one identity (0% rates)", () => {
       assumptions: defaultAssumptions({ ...zeroMarket, sweepIdleOffset: false }),
     });
     const r = runScenario(h, def("r", { debt_recycle_you_growth: 250_000 }));
-    expect(r.homeLoan).toBeCloseTo(150_000, 0);
-    expect(r.offset).toBeCloseTo(80_000, 0);
-    expect(r.investmentLoan).toBeCloseTo(250_000, 0);
+    // Day one, before any pay has flowed through the cash pool — the redraw
+    // itself must not touch the offset.
+    const day0 = r.years[0]!;
+    expect(day0.homeLoan).toBeCloseTo(150_000, 0);
+    expect(day0.offset).toBeCloseTo(80_000, 0);
+    expect(day0.investmentLoan).toBeCloseTo(250_000, 0);
     expect(r.taxableYou).toBeCloseTo(250_000, 0);
   });
 
@@ -257,13 +260,88 @@ describe("debt recycle deduction", () => {
       h,
       def("r", { debt_recycle_you_growth: h.lumpSum }),
     );
-    // Paying 6% to hold a 0%-return asset is a loss even after the
-    // deduction — the ATO refunds at most your marginal rate, never the
-    // whole dollar of interest.
+    // Recycling locks a quarter-million of debt outside the offset: the
+    // split can't be offset the way the home loan can, so once cash piles
+    // up the un-recycled household gets to kill all its interest and the
+    // recycled one is still paying 6% on the split. The deduction softens
+    // that but never covers it, because the ATO refunds at most your
+    // marginal rate, never the whole dollar.
     expect(recycle.netWealth).toBeLessThan(invest.netWealth);
-    // Roughly lump * rate * (1 - MTR) * years, net cost after the deduction.
-    const rough = h.lumpSum * 0.06 * (1 - combinedMarginalRate(h.you)) * 10;
-    expect(invest.netWealth - recycle.netWealth).toBeGreaterThan(rough * 0.8);
+    const gap = invest.netWealth - recycle.netWealth;
+    // The gap is the after-tax cost of the interest the offset can no longer
+    // reach — well short of the raw interest, and nowhere near zero.
+    const rawInterest = recycle.totalInvestmentInterest;
+    expect(gap).toBeLessThan(rawInterest);
+    expect(gap).toBeGreaterThan(rawInterest * (1 - combinedMarginalRate(h.you)) * 0.5);
+  });
+
+  it("charges home-loan interest against net wealth, the same as investment-loan interest", () => {
+    // Regression: home-loan interest used to be computed and then dropped,
+    // so an interest-only home loan cost the household nothing in the model
+    // while the investment split cost full freight — which quietly made
+    // debt recycling look worse than it is.
+    const build = (annualRate: number) =>
+      hush({
+        loan: {
+          balance: 400_000,
+          offset: 0,
+          annualRate,
+          remainingYears: 25,
+          interestOnly: true,
+        },
+        assumptions: defaultAssumptions({
+          ...zeroMarket,
+          sweepIdleOffset: false,
+          horizonYears: 1,
+        }),
+      });
+    const free = runScenario(build(0), def("o", {}));
+    const costly = runScenario(build(0.06), def("o", {}));
+    expect(costly.totalHomeInterest).toBeGreaterThan(0);
+    expect(free.netWealth - costly.netWealth).toBeCloseTo(
+      costly.totalHomeInterest,
+      0,
+    );
+  });
+
+  it("re-amortises the home repayment over what's left after the split", () => {
+    const h = hush({
+      loan: {
+        balance: 400_000,
+        offset: 0,
+        annualRate: 0.06,
+        remainingYears: 25,
+        interestOnly: false,
+      },
+      assumptions: defaultAssumptions({ ...zeroMarket, sweepIdleOffset: false }),
+    });
+    const plain = runScenario(h, def("o", { offset: h.lumpSum }));
+    const recycle = runScenario(h, def("r", { debt_recycle_you_growth: 100_000 }));
+    const full = plain.months[0]!.homeLoanPayment;
+    // A quarter of the loan moved to the split, so the home repayment is a
+    // quarter smaller — the bank sizes each facility to its own balance.
+    expect(recycle.months[0]!.homeLoanPayment).toBeCloseTo(full * 0.75, 0);
+  });
+
+  it("leaves the repayment alone for an extra repayment, finishing the loan early", () => {
+    const h = hush({
+      loan: {
+        balance: 400_000,
+        offset: 0,
+        annualRate: 0.06,
+        remainingYears: 25,
+        interestOnly: false,
+      },
+      assumptions: defaultAssumptions({ ...zeroMarket, sweepIdleOffset: false }),
+    });
+    const plain = runScenario(h, def("o", { offset: h.lumpSum }));
+    const repaid = runScenario(h, def("p", { extra_repay: 100_000 }));
+    // Paying a lump off doesn't recast the loan — same payment, shorter term.
+    expect(repaid.months[0]!.homeLoanPayment).toBeCloseTo(
+      plain.months[0]!.homeLoanPayment,
+      0,
+    );
+    expect(repaid.homeLoan).toBeLessThan(plain.homeLoan);
   });
 
   it("values the interest deduction on the tax scale, not a flat 47%", () => {
@@ -516,7 +594,7 @@ describe("NCC bring-forward TSB bands", () => {
 });
 
 describe("idle offset sweep", () => {
-  it("buys unlevered spouse growth with offset above the restricted floor", () => {
+  it("buys unlevered spouse growth with offset above the home loan", () => {
     const h = hush({
       loan: {
         balance: 100_000,
@@ -533,10 +611,12 @@ describe("idle offset sweep", () => {
     const r = runScenario(h, def("o", { offset: h.lumpSum }));
     expect(r.investmentLoan).toBe(0);
     expect(r.homeLoan).toBeCloseTo(100_000, 0);
-    // No restriction set, so the sweep takes it all the way to zero — even
-    // below the still-outstanding home loan balance.
-    expect(r.offset).toBeCloseTo(0, 0);
-    expect(r.taxableSpouse).toBeCloseTo(180_000 + h.lumpSum, 0);
+    // Day one, before pay starts flowing through the pool. No restriction
+    // set, so the floor is just the home loan balance — offset builds to
+    // full loan parity first, then the rest is swept.
+    const day0 = r.years[0]!;
+    expect(day0.offset).toBeCloseTo(100_000, 0);
+    expect(day0.taxableTotal).toBeCloseTo(180_000 + h.lumpSum - 100_000, 0);
     expect(r.taxableYou).toBe(0);
   });
 });
@@ -575,30 +655,31 @@ describe("restricted offset (not yours)", () => {
     expect(a.totalHomeInterest).toBeCloseTo(b.totalHomeInterest, 0);
   });
 
-  it("is never swept into investments, even when idle-offset sweeping is on", () => {
+  it("keeps the floor at the restricted amount once it's bigger than the loan", () => {
     const h = hush({
       loan: {
-        balance: 100_000,
+        balance: 50_000,
         offset: 180_000,
         annualRate: 0,
         remainingYears: 25,
         interestOnly: true,
-        restrictedOffset: 60_000,
+        restrictedOffset: 100_000,
       },
       assumptions: defaultAssumptions({ ...zeroMarket, sweepIdleOffset: true }),
     });
     const r = runScenario(h, def("o", { offset: h.lumpSum }));
-    // idle = offset(180k+250k) - restricted(60k) = 370k swept, leaving
-    // exactly the restricted 60k sitting in offset — the home loan balance
-    // (100k) is no longer a floor.
-    expect(r.offset).toBeCloseTo(60_000, 0);
-    expect(r.taxableSpouse).toBeCloseTo(180_000 + h.lumpSum - 60_000, 0);
+    // floor = max(homeLoan 50k, restricted 100k) = 100k — the loan is
+    // already more than covered, so the restriction is what's protected.
+    // idle = offset(180k+250k) - 100k = 330k swept, on day one.
+    const day0 = r.years[0]!;
+    expect(day0.offset).toBeCloseTo(100_000, 0);
+    expect(day0.taxableTotal).toBeCloseTo(180_000 + h.lumpSum - 100_000, 0);
   });
 
-  it("protects idle cash when offset is at or below the restricted floor", () => {
+  it("protects idle cash when offset hasn't reached the floor yet", () => {
     const h = hush({
       loan: {
-        balance: 100_000,
+        balance: 30_000,
         offset: 40_000,
         annualRate: 0,
         remainingYears: 25,
@@ -607,11 +688,12 @@ describe("restricted offset (not yours)", () => {
       },
       assumptions: defaultAssumptions({ ...zeroMarket, sweepIdleOffset: true }),
     });
-    // offset (40k) is under the restriction (50k) even before the lump —
-    // empty allocation, so nothing should sweep.
+    // floor = max(homeLoan 30k, restricted 50k) = 50k. offset (40k) is
+    // under that even before the lump — empty allocation, nothing sweeps.
     const r = runScenario(h, def("o", {}));
-    expect(r.taxableSpouse).toBe(0);
-    expect(r.offset).toBeCloseTo(40_000, 0);
+    const day0 = r.years[0]!;
+    expect(day0.taxableTotal).toBe(0);
+    expect(day0.offset).toBeCloseTo(40_000, 0);
   });
 });
 
@@ -660,5 +742,413 @@ describe("Div 293", () => {
       5,
     );
     expect(division293Tax(180_000, 32_500, 250_000)).toBe(0);
+  });
+});
+
+describe("annual tax settlement (1 Jul FY rollover)", () => {
+  it("keeps the monthly refund out of the offset until the FY rolls over in July", () => {
+    const h = hush({
+      loan: {
+        balance: 650_000,
+        offset: 80_000,
+        annualRate: 0,
+        remainingYears: 25,
+        interestOnly: true,
+      },
+      assumptions: defaultAssumptions({
+        ...zeroMarket,
+        startDate: "2026-09-01",
+        investmentLoanRate: 0.06,
+        sweepIdleOffset: false,
+      }),
+    });
+    const r = runScenario(h, def("r", { debt_recycle_you_growth: h.lumpSum }));
+    const months = r.months;
+    const delta = (i: number) => months[i]!.offset - months[i - 1]!.offset;
+    // Pay settles into the offset at the same rate every month, so the only
+    // thing that can make one month different is the refund.
+    for (let i = 2; i < 9; i++) {
+      expect(delta(i)).toBeCloseTo(delta(1), 0);
+    }
+    // Month 10 is the first time the simulated calendar rolls from June into
+    // July, and that's when the whole year's refund shows up — once.
+    expect(delta(9)).toBeGreaterThan(delta(8) + 1);
+    const totalNetTax = months
+      .slice(0, 10)
+      .reduce((s, mo) => s + mo.incomeTax, 0);
+    expect(delta(9) - delta(8)).toBeCloseTo(-totalNetTax, 0);
+  });
+});
+
+describe("distribution schedule", () => {
+  const yielding = (distributionsPerYear: number) =>
+    hush({
+      loan: {
+        balance: 0,
+        offset: 0,
+        annualRate: 0,
+        remainingYears: 25,
+        interestOnly: true,
+      },
+      assumptions: defaultAssumptions({
+        ...zeroMarket,
+        startDate: "2027-01-01",
+        horizonYears: 1,
+        sweepIdleOffset: false,
+        incomeAsset: {
+          label: "yielder",
+          growthRate: 0,
+          yieldRate: 0.04,
+          mer: 0,
+          frankingPercent: 0,
+          reinvestDividends: false,
+          distributionsPerYear,
+        },
+      }),
+    });
+
+  it("pays a quarterly fund in four lumps, not twelve dribbles", () => {
+    const r = runScenario(
+      yielding(4),
+      def("i", { taxable_you_income: 120_000 }),
+    );
+    const paid = r.months.filter((m) => m.dividendCash > 0.5);
+    expect(paid.map((m) => m.date.slice(5, 7))).toEqual([
+      "03",
+      "06",
+      "09",
+      "12",
+    ]);
+    // Nine months of the year show nothing arriving at all.
+    expect(r.months.filter((m) => m.dividendCash <= 0.5)).toHaveLength(8);
+  });
+
+  it("pays the same total over the year however it's split up", () => {
+    const total = (perYear: number) =>
+      runScenario(yielding(perYear), def("i", { taxable_you_income: 120_000 }))
+        .months.reduce((s, m) => s + m.dividendCash, 0);
+    // A quarter's yield sits uninvested a little longer, so the totals are
+    // close rather than identical — but nothing is lost or invented.
+    expect(total(4)).toBeCloseTo(total(12), 0);
+    expect(total(1)).toBeCloseTo(total(12), 0);
+  });
+});
+
+describe("cash pool", () => {
+  const poolHousehold = (assumptions: Partial<Assumptions> = {}) =>
+    hush({
+      you: defaultPerson("you", { taxableIncome: 60_000 }),
+      spouse: defaultPerson("spouse", { taxableIncome: 0 }),
+      loan: {
+        balance: 50_000,
+        offset: 0,
+        annualRate: 0,
+        remainingYears: 25,
+        interestOnly: true,
+      },
+      assumptions: defaultAssumptions({
+        ...zeroMarket,
+        sweepIdleOffset: false,
+        ...assumptions,
+      }),
+    });
+
+  it("settles pay minus every cost into the offset each month", () => {
+    const r = runScenario(poolHousehold({ monthlyExpenses: 3_000 }), def("o", {}));
+    const monthlyPay = (60_000 - incomeTax(60_000, 0.02)) / 12;
+    const leftover = monthlyPay - 3_000; // no loan payment/interest here (0% IO)
+    expect(r.months[0]!.spareCash).toBeCloseTo(leftover, 0);
+    expect(r.months[0]!.offsetContribution).toBeCloseTo(leftover, 0);
+    expect(r.months[0]!.offset).toBeCloseTo(leftover, 0);
+    // The pool is transit only — it doesn't hold a balance between months.
+    expect(r.months[0]!.cash).toBe(0);
+    expect(r.months[1]!.offset).toBeCloseTo(leftover * 2, 0);
+  });
+
+  it("keeps the whole leftover, not a fixed monthly amount", () => {
+    // The old fixed "extra to offset per month" dial is gone: whatever the
+    // household doesn't spend lands in the offset, however large.
+    const r = runScenario(poolHousehold(), def("o", {}));
+    const monthlyPay = (60_000 - incomeTax(60_000, 0.02)) / 12;
+    expect(r.months[0]!.offsetContribution).toBeCloseTo(monthlyPay, 0);
+  });
+
+  it("ignores spouse's pay when income isn't pooled", () => {
+    const notPooled = runScenario(
+      poolHousehold({ pooledIncome: false }),
+      def("o", {}),
+    );
+    const pooled = runScenario(
+      poolHousehold({ pooledIncome: true }),
+      def("o", {}),
+    );
+    const youOnlyPay = (60_000 - incomeTax(60_000, 0.02)) / 12;
+    expect(notPooled.months[0]!.afterTaxPay).toBeCloseTo(youOnlyPay, 0);
+    // Spouse earns nothing here, so pooling changes nothing — the point is
+    // that your own pay is what reaches the pool either way.
+    expect(pooled.months[0]!.offsetContribution).toBeCloseTo(
+      notPooled.months[0]!.offsetContribution,
+      0,
+    );
+  });
+
+  it("lines plan years up with calendar years from a 1 January start", () => {
+    const r = runScenario(
+      poolHousehold({
+        startDate: "2027-01-01",
+        incomeGrowthRate: 0.1,
+        annualHolidaySpend: 5_000,
+      }),
+      def("o", {}),
+    );
+    // A row covers the month it's named after, rather than the instant it
+    // closes — month one of a 1 Jan start is January, not February.
+    expect(r.months[0]!.date).toBe("2027-01-01");
+    expect(r.months[11]!.date).toBe("2027-12-01");
+    expect(r.months[12]!.date).toBe("2028-01-01");
+    // Pay steps up on 1 January, not partway through the year.
+    expect(r.months[11]!.afterTaxPay).toBeCloseTo(r.months[0]!.afterTaxPay, 0);
+    expect(r.months[12]!.afterTaxPay).toBeGreaterThan(
+      r.months[11]!.afterTaxPay + 1,
+    );
+    // And the holiday lands each January, opening the calendar year.
+    expect(r.months[0]!.holidaySpend).toBeCloseTo(5_000, 0);
+    expect(r.months[12]!.holidaySpend).toBeCloseTo(5_000, 0);
+    expect(r.months[11]!.holidaySpend).toBe(0);
+  });
+
+  it("charges annualHolidaySpend in holidayMonth, January by default", () => {
+    const r = runScenario(
+      poolHousehold({ monthlyExpenses: 0, annualHolidaySpend: 5_000 }),
+      def("o", {}),
+    );
+    for (const m of r.months) {
+      const january = m.date.slice(5, 7) === "01";
+      expect(m.holidaySpend).toBeCloseTo(january ? 5_000 : 0, 0);
+    }
+    // The plan starts in September, so the first holiday is four months in,
+    // not twelve — it follows the calendar, not the plan's anniversary.
+    expect(r.months[4]!.date).toBe("2027-01-01");
+    expect(r.years[1]!.holidaySpend).toBeCloseTo(5_000, 0);
+    // It comes out of that month's spare cash, so less reaches the offset
+    // than in a normal month.
+    expect(r.months[4]!.spareCash).toBeCloseTo(
+      r.months[3]!.spareCash - 5_000,
+      0,
+    );
+    expect(r.months[4]!.offsetContribution).toBeLessThan(
+      r.months[3]!.offsetContribution,
+    );
+  });
+
+  it("moves the holiday to whichever month holidayMonth names", () => {
+    const r = runScenario(
+      poolHousehold({
+        monthlyExpenses: 0,
+        annualHolidaySpend: 5_000,
+        holidayMonth: 12,
+      }),
+      def("o", {}),
+    );
+    for (const m of r.months) {
+      const december = m.date.slice(5, 7) === "12";
+      expect(m.holidaySpend).toBeCloseTo(december ? 5_000 : 0, 0);
+    }
+    expect(r.months[3]!.date).toBe("2026-12-01");
+  });
+
+  it("covers a holiday bigger than the month's pay out of the offset", () => {
+    const monthlyPay = (60_000 - incomeTax(60_000, 0.02)) / 12;
+    const holiday = Math.round(monthlyPay * 4); // far more than one month's pay
+    const r = runScenario(
+      poolHousehold({ monthlyExpenses: 0, annualHolidaySpend: holiday }),
+      def("o", {}),
+    );
+    const before = r.months[3]!.offset;
+    const holidayMonth = r.months[4]!;
+    expect(holidayMonth.date).toBe("2027-01-01");
+    // The month runs a real deficit, and the offset — the everyday account —
+    // wears it, rather than the pool carrying a negative balance.
+    expect(holidayMonth.spareCash).toBeLessThan(0);
+    expect(holidayMonth.offsetContribution).toBeLessThan(0);
+    expect(holidayMonth.cash).toBe(0);
+    expect(holidayMonth.offset).toBeCloseTo(before + holidayMonth.spareCash, 0);
+  });
+
+  it("holds the minimum cash buffer back from being invested", () => {
+    const build = (minimumCash: number) =>
+      hush({
+        loan: {
+          balance: 0,
+          offset: 200_000,
+          annualRate: 0,
+          remainingYears: 25,
+          interestOnly: true,
+          restrictedOffset: 0,
+        },
+        assumptions: defaultAssumptions({ ...zeroMarket, minimumCash }),
+      });
+    const noBuffer = runScenario(build(0), def("o", {}));
+    const buffered = runScenario(build(50_000), def("o", {}));
+    // Loan is paid off, so with no buffer the whole offset is idle and gets
+    // invested on day one. The buffer keeps 50k of it liquid instead.
+    expect(noBuffer.years[0]!.offset).toBeCloseTo(0, 0);
+    expect(buffered.years[0]!.offset).toBeCloseTo(50_000, 0);
+    // Still the household's money either way — just not at risk.
+    expect(buffered.years[0]!.netWealth).toBeCloseTo(
+      noBuffer.years[0]!.netWealth,
+      0,
+    );
+  });
+
+  it("saves for the holiday ahead of time instead of raiding the cash buffer", () => {
+    const build = (annualHolidaySpend: number) =>
+      hush({
+        // Loan already paid off, so the liquid floor — not parity — is what
+        // governs the sweep. That's where the holiday could bite.
+        loan: {
+          balance: 0,
+          offset: 60_000,
+          annualRate: 0,
+          remainingYears: 25,
+          interestOnly: true,
+          restrictedOffset: 0,
+        },
+        assumptions: defaultAssumptions({
+          ...zeroMarket,
+          minimumCash: 20_000,
+          monthlyExpenses: 0,
+          annualHolidaySpend,
+          holidayMonth: 1,
+        }),
+      });
+    const withHoliday = runScenario(build(12_000), def("o", {}));
+    const byMonth = (iso: string) =>
+      withHoliday.months.find((m) => m.date === iso)!;
+
+    // Through the year the floor climbs a twelfth of the trip at a time, so
+    // the offset holds the buffer plus what's saved so far.
+    expect(byMonth("2027-01-01").offset).toBeCloseTo(20_000, 0);
+    expect(byMonth("2027-07-01").offset).toBeCloseTo(20_000 + 6_000, 0);
+    expect(byMonth("2027-12-01").offset).toBeCloseTo(20_000 + 11_000, 0);
+    // The trip is paid for out of what was saved for it — the cash buffer
+    // itself is never dipped into.
+    expect(byMonth("2028-01-01").holidaySpend).toBeCloseTo(12_000, 0);
+    for (const m of withHoliday.months) {
+      expect(m.offset).toBeGreaterThanOrEqual(20_000 - 0.5);
+    }
+  });
+
+  it("holds the holiday fund clear of the offset target when asked to", () => {
+    const build = (holidayFundOnTop: boolean) =>
+      hush({
+        // Modest surplus, so a $12k trip is worth several months of it —
+        // otherwise the offset refills the same month and neither setting
+        // ever stalls.
+        you: defaultPerson("you", { taxableIncome: 60_000 }),
+        spouse: defaultPerson("spouse", { taxableIncome: 0 }),
+        // A real loan outstanding and already at parity, which is the only
+        // regime where the two settings differ.
+        loan: {
+          balance: 300_000,
+          offset: 300_000,
+          annualRate: 0,
+          remainingYears: 25,
+          interestOnly: true,
+          restrictedOffset: 0,
+        },
+        assumptions: defaultAssumptions({
+          ...zeroMarket,
+          minimumCash: 0,
+          monthlyExpenses: 2_000,
+          annualHolidaySpend: 12_000,
+          holidayMonth: 1,
+          holidayFundOnTop,
+        }),
+      });
+    const onTop = runScenario(build(true), def("o", {}));
+    const inside = runScenario(build(false), def("o", {}));
+    const at = (r: typeof onTop, iso: string) =>
+      r.months.find((m) => m.date === iso)!;
+
+    // On top: the offset visibly carries the loan plus what's been saved, so
+    // the trip spends its own money.
+    expect(at(onTop, "2027-07-01").offset).toBeCloseTo(
+      at(onTop, "2027-07-01").homeLoan + 6_000,
+      0,
+    );
+    // Inside: the offset is the holiday fund, so it never rises above parity
+    // and the trip is made good out of the months after it.
+    expect(at(inside, "2027-07-01").offset).toBeCloseTo(
+      at(inside, "2027-07-01").homeLoan,
+      0,
+    );
+    // Which is why one keeps investing through the trip and the other stalls.
+    const stalled = (r: typeof onTop) =>
+      r.months.filter((m) => m.invested <= 0.5).length;
+    expect(stalled(onTop)).toBeLessThan(stalled(inside));
+  });
+
+  it("stacks the cash buffer on top of restricted offset, both staying liquid", () => {
+    const h = hush({
+      loan: {
+        balance: 0,
+        offset: 200_000,
+        annualRate: 0,
+        remainingYears: 25,
+        interestOnly: true,
+        restrictedOffset: 100_000,
+      },
+      assumptions: defaultAssumptions({ ...zeroMarket, minimumCash: 30_000 }),
+    });
+    const r = runScenario(h, def("o", {}));
+    // Restricted money isn't yours to spend and the buffer is yours to keep
+    // liquid — they're different rules, so they add up rather than overlap.
+    expect(r.years[0]!.offset).toBeCloseTo(130_000, 0);
+  });
+});
+
+describe("novated lease", () => {
+  it("triggers Division 293 once the lease ends and taxable income effectively rises", () => {
+    const build = (endDate: string) =>
+      hush({
+        you: defaultPerson("you", {
+          taxableIncome: 245_000,
+          salary: 20_000 / 0.12,
+          sgRatePercent: 12,
+          extraConcessionalFortnightly: 0,
+          novatedLeaseFortnightly: 500, // $13,000/yr
+          novatedLeaseEndDate: endDate,
+        }),
+        assumptions: defaultAssumptions({
+          ...zeroMarket,
+          horizonYears: 1,
+          incomeGrowthRate: 0,
+        }),
+      });
+    // zeroMarket starts 2026-09-01.
+    const stillLeased = build("2027-09-01"); // ends 12 months out — active the whole horizon
+    const leaseAlreadyEnded = build("2026-09-01"); // ends right when the plan starts
+
+    const a = runScenario(stillLeased, def("o", { offset: stillLeased.lumpSum }));
+    const b = runScenario(
+      leaseAlreadyEnded,
+      def("o", { offset: leaseAlreadyEnded.lumpSum }),
+    );
+    // Division 293 = min(committed, income + committed − 250k) × 15%.
+    // Still leased: income 245k, over = 245k+20k−250k = 15k < committed
+    // (20k) — "over" is the binding side: 15k × 15% = $2,250.
+    // Lease over: income 258k, over = 258k+20k−250k = 28k > committed —
+    // committed is now the binding side: 20k × 15% = $3,000. The $13k/yr
+    // isn't taxed 1:1 — it's whichever side of the min() is smaller.
+    const expectedGap = 20_000 * 0.15 - 15_000 * 0.15;
+    // Net wealth alone can't isolate this any more: the lease ending also
+    // hands the household its salary-sacrificed pay back, and that now lands
+    // in the cash pool instead of vanishing. Net the pay difference out —
+    // taken from the engine's own figures rather than re-derived here — and
+    // what's left is the Division 293 step.
+    const payGap = b.years[1]!.afterTaxPay - a.years[1]!.afterTaxPay;
+    expect(payGap).toBeGreaterThan(0);
+    expect(a.netWealth - b.netWealth + payGap).toBeCloseTo(expectedGap, 0);
   });
 });

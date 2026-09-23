@@ -39,6 +39,17 @@ export type Person = {
   /** Unused concessional cap carried forward (ATO 5-year rule, TSB test skipped) */
   unusedConcessionalCarryForward: number;
   age: number;
+  /**
+   * Pre-tax novated lease deduction, per fortnight — already netted out of
+   * `taxableIncome` above, same as salary sacrifice. Unlike super
+   * sacrifice, a lease has an end date: once `novatedLeaseEndDate` passes,
+   * this stops being deducted and taxable income rises back up. A fixed
+   * calendar date rather than "months remaining" so it doesn't need
+   * updating every month.
+   */
+  novatedLeaseFortnightly: number;
+  /** ISO yyyy-mm-dd the lease ends. Empty string = no lease. */
+  novatedLeaseEndDate: string;
 };
 
 export type Loan = {
@@ -71,6 +82,14 @@ export type AssetSleeve = {
   frankingPercent: number;
   /** Reinvest yield (DRP). Tax still levied. */
   reinvestDividends: boolean;
+  /**
+   * How many times a year the fund actually distributes — 4 for the usual
+   * quarterly ETF, 12 to smear it evenly. Yield accrues every month either
+   * way; this only decides when it lands as cash (or as a DRP parcel), so
+   * it barely moves the horizon numbers but makes a month-by-month plan
+   * match what shows up in the account.
+   */
+  distributionsPerYear: number;
 };
 
 export type Assumptions = {
@@ -108,12 +127,67 @@ export type Assumptions = {
    * be un-set over a PUT, only ever set.
    */
   investmentLoanRate: number | null;
-  /** Park concessional-contribution tax refunds in the offset */
+  /**
+   * Park the year's net tax settlement (investment-loan deduction, yield
+   * tax, concessional-contribution refunds/Division 293/excess tax) in the
+   * offset. Settled once a year, at the 1 Jul FY rollover, not smoothed
+   * into every month — matching a normal PAYG withholding + annual return.
+   */
   refundsToOffset: boolean;
   /** Use NCC bring-forward when TSB allows */
   useNccBringForward: boolean;
   /** Invest offset above the home loan in unlevered shares */
   sweepIdleOffset: boolean;
+  /**
+   * Everyday cash kept liquid for things the model doesn't itemise. It
+   * stays in the offset — still cutting home-loan interest — and simply
+   * isn't invested: it raises the floor the idle-offset sweep works down
+   * to, on top of Loan.restrictedOffset and whatever is currently saved
+   * toward the next annualHolidaySpend.
+   */
+  minimumCash: number;
+  /**
+   * Household living costs, per month — not otherwise modelled. Drawn from
+   * the cash pool every month, like any other cost.
+   */
+  monthlyExpenses: number;
+  /**
+   * A lump discretionary cost — a holiday, typically — drawn from the cash
+   * pool once a year, in holidayMonth. Saved for in advance: a twelfth is
+   * added to the liquid floor each month so the money is there when the
+   * trip comes, rather than the trip eating into minimumCash.
+   */
+  annualHolidaySpend: number;
+  /**
+   * Calendar month annualHolidaySpend comes out, 1 = January. Pinned to the
+   * calendar, not to the plan's start date, so it lands in the same month
+   * every year whenever the plan begins. Worth knowing that picking 12
+   * makes every calendar-year row a post-holiday snapshot, since the year
+   * rows sample their last month.
+   */
+  holidayMonth: number;
+  /**
+   * Whether the holiday fund is held on top of the offset's own target, or
+   * absorbed inside it.
+   *
+   * On: the offset carries parity-with-the-loan *plus* whatever is saved so
+   * far, so the trip spends its own money and investing never pauses. Costs
+   * a little, because a dollar above parity offsets nothing and so earns
+   * nothing while it waits.
+   *
+   * Off: the fund only counts when the liquid floor is already the binding
+   * one — while a big loan is outstanding the offset is the holiday fund,
+   * so the money stays invested and the trip is repaid out of the months
+   * after it instead.
+   */
+  holidayFundOnTop: boolean;
+  /**
+   * Whether spouse's after-tax pay flows into the shared cash pool — off
+   * for households that don't pool income for joint expenses/saving, even
+   * though they're pooling this lump. When false, only your own pay does,
+   * while household costs still come out of the same pool.
+   */
+  pooledIncome: boolean;
 };
 
 export type Household = {
@@ -171,15 +245,25 @@ export type YearRow = {
   investmentLoan: number;
   /** Full offset balance, including any restrictedOffset still sitting in it. */
   offset: number;
-  /** Uninvested cash outside the offset account. */
+  /** Everyday cash pool at the end of the period — pay in, costs out, surplus swept to offset. */
   cash: number;
   /** Offset money that isn't yours (see Loan.restrictedOffset). Constant for the run. */
   restrictedOffset: number;
   netDebt: number;
   homeInterest: number;
+  /** Total scheduled home-loan payment (principal + interest) for the period. */
+  homeLoanPayment: number;
   investmentInterest: number;
   incomeTax: number;
   cgtTax: number;
+  /** Cash swept from the pool into the offset — 0 once parity with the home loan is reached. */
+  offsetContribution: number;
+  /** annualHolidaySpend charged in this period — 0 except the month it lands on. */
+  holidaySpend: number;
+  /** Pay in, minus every cost out, before the sweep to offset. Negative means the pool was overdrawn. */
+  spareCash: number;
+  /** Combined after-tax pay for the period — standard PAYG on taxable income, lease-adjusted. */
+  afterTaxPay: number;
 };
 
 /**
@@ -193,6 +277,8 @@ export type MonthRow = {
   month: number;
   /** Which YearRow.year this month rolls into (1-based; month 1..12 -> year 1). */
   year: number;
+  /** ISO date this month period opens on — the calendar month the row covers. */
+  date: string;
   netWealth: number;
   superTotal: number;
   taxableTotal: number;
@@ -202,8 +288,28 @@ export type MonthRow = {
   cash: number;
   invested: number;
   homeInterest: number;
+  /** Total home-loan payment (principal + interest) for the month. */
+  homeLoanPayment: number;
   investmentInterest: number;
   incomeTax: number;
+  /** Cash swept from the pool into the offset this month — 0 once parity is reached. */
+  offsetContribution: number;
+  /** annualHolidaySpend charged this month — 0 except the one month a year it lands on. */
+  holidaySpend: number;
+  /** Pay in, minus every cost out, before the sweep to offset. Negative means the pool was overdrawn. */
+  spareCash: number;
+  /** Dividends paid out as cash this month (sleeves not reinvesting), landing in the pool. */
+  dividendCash: number;
+  /** The year's tax settled this month — refund positive, bill negative. 0 except at the FY rollover. */
+  taxSettlement: number;
+  /** Saved toward the next holiday by this month, held liquid rather than invested. */
+  holidayReserved: number;
+  /** Offset balance before anything this month moved it — the opening side of the flow. */
+  offsetOpening: number;
+  /** The part of `invested` that came out of the offset, not straight from the lump. */
+  investedFromOffset: number;
+  /** Combined after-tax pay for the month — standard PAYG on taxable income, lease-adjusted. */
+  afterTaxPay: number;
 };
 
 export type ScenarioResult = {

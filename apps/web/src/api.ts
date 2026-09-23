@@ -12,6 +12,8 @@ export type Person = {
   extraConcessionalThisFy: number;
   unusedConcessionalCarryForward: number;
   age: number;
+  novatedLeaseFortnightly: number;
+  novatedLeaseEndDate: string;
 };
 
 export type Loan = {
@@ -31,6 +33,7 @@ export type AssetSleeve = {
   mer: number;
   frankingPercent: number;
   reinvestDividends: boolean;
+  distributionsPerYear: number;
 };
 
 export type Assumptions = {
@@ -54,6 +57,12 @@ export type Assumptions = {
   refundsToOffset: boolean;
   useNccBringForward: boolean;
   sweepIdleOffset: boolean;
+  minimumCash: number;
+  monthlyExpenses: number;
+  annualHolidaySpend: number;
+  holidayMonth: number;
+  holidayFundOnTop: boolean;
+  pooledIncome: boolean;
 };
 
 export type Household = {
@@ -79,14 +88,20 @@ export type YearRow = {
   restrictedOffset: number;
   netDebt: number;
   homeInterest: number;
+  homeLoanPayment: number;
   investmentInterest: number;
   incomeTax: number;
   cgtTax: number;
+  offsetContribution: number;
+  holidaySpend: number;
+  spareCash: number;
+  afterTaxPay: number;
 };
 
 export type MonthRow = {
   month: number;
   year: number;
+  date: string;
   netWealth: number;
   superTotal: number;
   taxableTotal: number;
@@ -96,8 +111,18 @@ export type MonthRow = {
   cash: number;
   invested: number;
   homeInterest: number;
+  homeLoanPayment: number;
   investmentInterest: number;
   incomeTax: number;
+  offsetContribution: number;
+  holidaySpend: number;
+  spareCash: number;
+  dividendCash: number;
+  taxSettlement: number;
+  holidayReserved: number;
+  offsetOpening: number;
+  investedFromOffset: number;
+  afterTaxPay: number;
 };
 
 export type ScenarioResult = {

@@ -591,7 +591,7 @@ details.plan h4:first-of-type {
 }
 
 .plan-table-wrap {
-  max-height: 320px;
+  max-height: 70vh;
   overflow-y: auto;
   border: 1px solid var(--line);
 }
@@ -626,6 +626,14 @@ details.plan h4:first-of-type {
 }
 
 .plan-year-row:hover td {
+  background: var(--line);
+}
+
+.plan-month-row {
+  cursor: pointer;
+}
+
+.plan-month-row:hover td {
   background: var(--line);
 }
 
@@ -794,4 +802,75 @@ details.plan h4:first-of-type {
   line-height: 1.4;
   box-shadow: 0 10px 28px #0b102090;
   pointer-events: none;
+}
+
+/* Month cash-flow popover — click a row in the plan table */
+.flow-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: #0b102055;
+}
+.flow-pop {
+  position: fixed;
+  z-index: 91;
+  width: min(23rem, calc(100vw - 1.5rem));
+  max-height: min(34rem, calc(100vh - 2rem));
+  overflow-y: auto;
+  padding: 0.85rem 1rem 1rem;
+  background: var(--paper, #fdfbf5);
+  color: inherit;
+  border: 1px solid var(--rule, #cfc7b4);
+  box-shadow: 0 16px 40px #0b102055;
+}
+.flow-pop h4 {
+  margin: 0 0 0.15rem;
+  font-family: var(--font-ui);
+  font-size: 0.95rem;
+}
+.flow-pop h5 {
+  margin: 0.85rem 0 0.3rem;
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+.flow-pop .flow-sub {
+  margin: 0;
+  font-size: 0.78rem;
+  opacity: 0.7;
+}
+.flow-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.16rem 0;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.flow-row span:last-child {
+  white-space: nowrap;
+}
+.flow-row.flow-total {
+  margin-top: 0.3rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--rule, #cfc7b4);
+  font-weight: 600;
+}
+.flow-row.flow-muted {
+  opacity: 0.55;
+}
+.flow-row.flow-part {
+  padding-left: 0.8rem;
+  font-size: 0.8rem;
+}
+.flow-pop .flow-close {
+  margin-top: 0.9rem;
+  padding: 0.3rem 0.7rem;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--rule, #cfc7b4);
 }
