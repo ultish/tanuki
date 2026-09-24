@@ -39,6 +39,30 @@ export type Person = {
   /** Unused concessional cap carried forward (ATO 5-year rule, TSB test skipped) */
   unusedConcessionalCarryForward: number;
   age: number;
+  /**
+   * Real pay changes, each "my taxable income is X from date Y". An event
+   * resets the base; `Assumptions.incomeGrowthRate` keeps compounding from
+   * it each 1 July. Events dated before a plan's start still apply, so a
+   * rise logged after `taxableIncome` was last edited is not lost.
+   */
+  payEvents?: PayEvent[];
+};
+
+export type PayEvent = {
+  /** ISO yyyy-mm-dd the new pay takes effect. */
+  from: string;
+  taxableIncome: number;
+  /**
+   * New OTE salary, which drives employer SG. Omitted: SG scales by the
+   * same ratio as `taxableIncome`, which is right for an ordinary rise.
+   */
+  salary?: number;
+};
+
+/** "The home loan rate is X from date Y." */
+export type RateEvent = {
+  from: string;
+  annualRate: number;
 };
 
 export type Loan = {
@@ -58,6 +82,13 @@ export type Loan = {
    * from net wealth and never swept into investments.
    */
   restrictedOffset?: number;
+  /**
+   * Dated rate changes. `annualRate` is the rate before the first event.
+   * When `monthlyRepayment` is unset, the P&I repayment is recalculated
+   * over the remaining term each time the rate changes, as a bank would.
+   * The investment loan follows these too while `investmentLoanRate` is null.
+   */
+  rateEvents?: RateEvent[];
 };
 
 export type AssetSleeve = {
@@ -191,11 +222,22 @@ export type YearRow = {
  */
 export type MonthRow = {
   month: number;
+  /** Calendar month this row covers, "yyyy-mm". Balances are as at its end. */
+  date: string;
   /** Which YearRow.year this month rolls into (1-based; month 1..12 -> year 1). */
   year: number;
   netWealth: number;
   superTotal: number;
+  superYou: number;
   taxableTotal: number;
+  /** Shares outside super by owner and sleeve. Debt-recycled shares are in `you_*`. */
+  shares: Record<HoldingKey, number>;
+  /**
+   * Money moved this month, by bucket. Month 1 carries the lump placement;
+   * later months the idle-offset sweep and anything logged. Negative is a
+   * sell.
+   */
+  flows: Flows;
   homeLoan: number;
   investmentLoan: number;
   offset: number;
@@ -249,6 +291,126 @@ export type ScenarioResult = {
   totalCapitalIn: number;
   years: YearRow[];
   months: MonthRow[];
+};
+
+export type SleeveKind = "growth" | "income";
+export type HoldingKey = `${PersonId}_${SleeveKind}`;
+export const HOLDING_KEYS: readonly HoldingKey[] = [
+  "you_growth",
+  "you_income",
+  "spouse_growth",
+  "spouse_income",
+];
+
+/** An allocation bucket, or the idle-offset sweep. */
+export type FlowKey = BucketId | "sweep";
+export type Flows = Partial<Record<FlowKey, number>>;
+
+/** One share parcel carried into a run that does not start from nothing. */
+export type OpeningLot = {
+  personId: PersonId;
+  sleeve: SleeveKind;
+  cost: number;
+  value: number;
+  acquiredDate: string;
+  valueAtCutover: number | null;
+};
+
+/**
+ * Where a household actually is at `date` — enough to carry on a
+ * simulation from there instead of from a standing start.
+ */
+export type OpeningPosition = {
+  /** ISO yyyy-mm-dd: the first day of the run that starts here. */
+  date: string;
+  homeLoan: number;
+  offset: number;
+  invLoan: number;
+  superYou: number;
+  superSpouse: number;
+  cash: number;
+  lots: OpeningLot[];
+  /** The P&I repayment in force, so the new run doesn't silently re-amortise. */
+  scheduledPayment: number;
+  remainingMonths: number;
+  /**
+   * The financial year in progress, so a run starting mid-FY taxes the rest
+   * of it on the same base and sees cap room already used.
+   */
+  fy: {
+    fy: number;
+    you: FyTaxState;
+    spouse: FyTaxState;
+    prevNet: number;
+    prevInvTax: number;
+  };
+};
+
+export type FyTaxState = {
+  assessable: number;
+  franking: number;
+  deductions: number;
+  /** One-off concessional contributions this FY: lump placement plus logged. */
+  oneOffCc: number;
+};
+
+/** A parcel as pulled from risu, already mapped onto tanuki's owners/sleeves. */
+export type RisuLot = {
+  /** Risu portfolio it came from; a plan only reads the portfolios it tracks. */
+  portfolioId: number;
+  personId: PersonId;
+  purpose: "taxable" | "debt_recycle";
+  sleeve: SleeveKind;
+  ticker: string;
+  cost: number;
+  /** AUD at month end. */
+  value: number;
+  acquiredDate: string;
+  valueAtCutover: number | null;
+};
+
+export type RisuTrade = {
+  portfolioId: number;
+  bucket: BucketId;
+  ticker: string;
+  /** Buy: the trade date. Sell: the disposal date. */
+  date: string;
+  /** Sells only: when the parcel sold was bought. */
+  acquiredDate?: string;
+  /** AUD. Positive for a buy (cost), negative for a sell (proceeds). */
+  amount: number;
+};
+
+/**
+ * One calendar month of what actually happened. Lives once on the
+ * household; every tracker reads the same log. Absent fields mean "use the
+ * projection".
+ */
+export type ActualMonth = {
+  /** "yyyy-mm" */
+  date: string;
+  confirmed: boolean;
+  flows?: Flows;
+  balances?: {
+    offset?: number;
+    homeLoan?: number;
+    investmentLoan?: number;
+    superYou?: number;
+    shares?: Partial<Record<HoldingKey, number>>;
+  };
+  /** Present when shares were pulled from risu; replaces share flows and balances. */
+  risu?: {
+    pulledAt: string;
+    lots: RisuLot[];
+    trades: RisuTrade[];
+    /**
+     * Whose shares these parcels account for. Risu replaces the projection
+     * only for them; anyone else's shares stay typed or projected. Set when a
+     * plan narrows the log to the portfolios it tracks; absent means both.
+     */
+    covers?: PersonId[];
+  };
+  note?: string;
 };
 
 export type RunReport = {

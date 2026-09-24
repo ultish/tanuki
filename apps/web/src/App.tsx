@@ -1,5 +1,4 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import {
   Area,
   AreaChart,
@@ -12,10 +11,13 @@ import {
   YAxis,
 } from "recharts";
 import {
+  createTracker,
   fetchHousehold,
   fetchMeta,
   runPlan,
   saveHousehold,
+  type PayEvent,
+  type RateEvent,
   type Allocation,
   type Explainer,
   type Household,
@@ -34,7 +36,9 @@ import {
   taxDelta,
   type SuperFill,
 } from "@tanuki/core";
-import { money, parseNum, parseNumLoose, pct } from "./format";
+import { money, pct } from "./format";
+import { Tracking } from "./Tracking";
+import { Field, NumInput, Stat, Tip } from "./ui";
 
 const MIX_BUCKETS: { id: string; label: string; tip: string }[] = [
   {
@@ -107,6 +111,16 @@ export default function App() {
   const [mix, setMix] = useState<Allocation>({});
   const [status, setStatus] = useState("Loading…");
   const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<"plans" | "tracking">(() =>
+    window.location.hash.startsWith("#tracking") ? "tracking" : "plans",
+  );
+  const [openTrackerId, setOpenTrackerId] = useState<string | null>(null);
+  const clearOpenTracker = useCallback(() => setOpenTrackerId(null), []);
+  const go = (next: "plans" | "tracking") => {
+    setView(next);
+    window.history.replaceState(null, "", next === "tracking" ? "#tracking" : "#");
+    window.scrollTo(0, 0);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -217,11 +231,40 @@ export default function App() {
             <p>Place the lump. Loan, offset, super, taxable. Side by side.</p>
           </div>
         </div>
-        <p className="mast-aside">
-          FY{meta?.fy ?? "2026-27"} caps. This one decides where new money
-          goes. Risu tracks what you already own.
-        </p>
+        <div className="mast-right">
+          <nav className="views" aria-label="View">
+            <button
+              type="button"
+              className={view === "plans" ? "on" : ""}
+              aria-pressed={view === "plans"}
+              onClick={() => go("plans")}
+            >
+              Plans
+            </button>
+            <button
+              type="button"
+              className={view === "tracking" ? "on" : ""}
+              aria-pressed={view === "tracking"}
+              onClick={() => go("tracking")}
+            >
+              Tracking
+            </button>
+          </nav>
+          <p className="mast-aside">
+            FY{meta?.fy ?? "2026-27"} caps. This one decides where new money
+            goes. Risu tracks what you already own.
+          </p>
+        </div>
       </header>
+
+      {view === "tracking" ? (
+        <Tracking
+          household={household}
+          openId={openTrackerId}
+          onOpened={clearOpenTracker}
+        />
+      ) : (
+        <>
 
       <div className="spread">
         <aside className="page page-left">
@@ -291,7 +334,14 @@ export default function App() {
             />
           ) : null}
           {selected ? (
-            <Detail selected={selected} household={household} />
+            <Detail
+              selected={selected}
+              household={household}
+              onTracked={(id) => {
+                setOpenTrackerId(id);
+                go("tracking");
+              }}
+            />
           ) : null}
         </main>
       </div>
@@ -304,140 +354,13 @@ export default function App() {
       />
 
       {meta ? <Explainers items={meta.explainers} /> : null}
+        </>
+      )}
       <p className="foot">
         {report?.disclaimer ??
           "Estimates only. Not financial, tax, or investment advice."}
       </p>
     </div>
-  );
-}
-
-function Tip({ text, children }: { text: string; children: React.ReactNode }) {
-  const [box, setBox] = useState<{
-    top: number;
-    left: number;
-    flip: boolean;
-  } | null>(null);
-
-  const open = (el: EventTarget & Element) => {
-    const r = el.getBoundingClientRect();
-    const width = Math.min(352, window.innerWidth - 24);
-    const left = Math.max(12, Math.min(r.left, window.innerWidth - width - 12));
-    const flip = window.innerHeight - r.bottom < 120;
-    setBox({
-      top: flip ? r.top - 8 : r.bottom + 8,
-      left,
-      flip,
-    });
-  };
-
-  return (
-    <>
-      <span
-        className="tip"
-        tabIndex={0}
-        onMouseEnter={(e) => open(e.currentTarget)}
-        onMouseLeave={() => setBox(null)}
-        onFocus={(e) => open(e.currentTarget)}
-        onBlur={() => setBox(null)}
-      >
-        {children}
-      </span>
-      {box
-        ? createPortal(
-            <div
-              className="tip-bubble"
-              role="tooltip"
-              style={{
-                top: box.top,
-                left: box.left,
-                transform: box.flip ? "translateY(-100%)" : undefined,
-              }}
-            >
-              {text}
-            </div>,
-            document.body,
-          )
-        : null}
-    </>
-  );
-}
-
-function Field({
-  label,
-  tip,
-  children,
-}: {
-  label: string;
-  tip: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="field">
-      <span>
-        <Tip text={tip}>{label}</Tip>
-      </span>
-      {children}
-    </label>
-  );
-}
-
-function NumInput({
-  value,
-  onChange,
-  digits,
-  id,
-  blankZero,
-  onClear,
-}: {
-  value: number | undefined;
-  onChange: (n: number) => void;
-  digits?: number;
-  id?: string;
-  blankZero?: boolean;
-  onClear?: () => void;
-}) {
-  const [raw, setRaw] = useState<string | null>(null);
-  const shown =
-    raw ??
-    (value == null || !Number.isFinite(value) || (blankZero && value === 0)
-      ? ""
-      : digits != null
-        ? value.toFixed(digits)
-        : String(value));
-
-  return (
-    <input
-      id={id}
-      inputMode="decimal"
-      value={shown}
-      placeholder={blankZero ? "0" : undefined}
-      onFocus={() =>
-        setRaw(
-          value == null || !Number.isFinite(value)
-            ? ""
-            : digits != null
-              ? value.toFixed(digits)
-              : String(value),
-        )
-      }
-      onChange={(e) => {
-        const next = e.target.value;
-        setRaw(next);
-        const n = parseNumLoose(next);
-        if (n != null) onChange(n);
-      }}
-      onBlur={() => {
-        if (raw != null && raw.trim() === "") {
-          if (onClear) onClear();
-          else onChange(0);
-        } else if (raw != null) {
-          const n = parseNum(raw);
-          onChange(n);
-        }
-        setRaw(null);
-      }}
-    />
   );
 }
 
@@ -528,7 +451,7 @@ function HouseholdForm({
         </Field>
         <Field
           label="Income growth % p.a."
-          tip="Grows taxable income each year for the tax scale. Employer SG and extra concessional grow at the same rate and keep going into super, after 15%."
+          tip="Grows taxable income each 1 July for the tax scale. Employer SG and extra concessional grow at the same rate and keep going into super, after 15%. A recorded pay change resets the base; growth carries on from it."
         >
           <NumInput
             value={(h.assumptions.incomeGrowthRate ?? 0) * 100}
@@ -547,6 +470,10 @@ function HouseholdForm({
           </Tip>
         </h3>
         <PersonFields person={h.you} onChange={setYou} />
+        <PayEventsEditor
+          person={h.you}
+          onChange={(payEvents) => setYou({ payEvents })}
+        />
       </div>
       <div className="section">
         <h3>
@@ -562,6 +489,10 @@ function HouseholdForm({
           </Tip>
         </h3>
         <PersonFields person={h.spouse} onChange={setSpouse} />
+        <PayEventsEditor
+          person={h.spouse}
+          onChange={(payEvents) => setSpouse({ payEvents })}
+        />
       </div>
 
       <div className="section">
@@ -628,6 +559,11 @@ function HouseholdForm({
             Interest-only home loan
           </Tip>
         </label>
+        <RateEventsEditor
+          events={h.loan.rateEvents}
+          currentRate={h.loan.annualRate}
+          onChange={(rateEvents) => setLoan({ rateEvents })}
+        />
       </div>
 
       <div className="section">
@@ -760,6 +696,134 @@ function HouseholdForm({
       </div>
       <p className="status">{status}</p>
     </>
+  );
+}
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function PayEventsEditor({
+  person,
+  onChange,
+}: {
+  person: Person;
+  onChange: (events: PayEvent[]) => void;
+}) {
+  const list = person.payEvents ?? [];
+  const set = (i: number, patch: Partial<PayEvent>) =>
+    onChange(list.map((e, j) => (j === i ? { ...e, ...patch } : e)));
+  return (
+    <div className="events">
+      <p className="events-head">
+        <Tip text="Real pay changes, each dated. From that date the new taxable income sets the tax scale and, with salary, employer SG. Income growth keeps compounding from it each 1 July. Leave salary blank to scale SG by the same ratio as taxable income.">
+          Pay changes
+        </Tip>
+      </p>
+      {list.length ? (
+        <div className="event-grid pay">
+          <span>From</span>
+          <span>Taxable income</span>
+          <span>Salary</span>
+          <span />
+          {list.map((e, i) => (
+            <Fragment key={i}>
+              <input
+                type="date"
+                aria-label="Pay change from"
+                value={e.from}
+                onChange={(ev) => set(i, { from: ev.target.value })}
+              />
+              <NumInput value={e.taxableIncome} onChange={(n) => set(i, { taxableIncome: n })} />
+              <NumInput
+                value={e.salary}
+                onChange={(n) => set(i, { salary: n })}
+                onClear={() => set(i, { salary: undefined })}
+              />
+              <button
+                type="button"
+                className="event-x"
+                aria-label="Remove pay change"
+                onClick={() => onChange(list.filter((_, j) => j !== i))}
+              >
+                ×
+              </button>
+            </Fragment>
+          ))}
+        </div>
+      ) : null}
+      <button
+        type="button"
+        className="event-add"
+        onClick={() =>
+          onChange([...list, { from: todayIso(), taxableIncome: person.taxableIncome }])
+        }
+      >
+        + Add a pay change
+      </button>
+    </div>
+  );
+}
+
+function RateEventsEditor({
+  events,
+  currentRate,
+  onChange,
+}: {
+  events: RateEvent[] | undefined;
+  currentRate: number;
+  onChange: (events: RateEvent[]) => void;
+}) {
+  const list = events ?? [];
+  const set = (i: number, patch: Partial<RateEvent>) =>
+    onChange(list.map((e, j) => (j === i ? { ...e, ...patch } : e)));
+  return (
+    <div className="events">
+      <p className="events-head">
+        <Tip text="Dated rate changes. Rate (%) above is the rate before the first one. The P&I payment is recalculated over the years left each time, like a bank would. The investment loan follows too unless it has its own rate.">
+          Rate changes
+        </Tip>
+      </p>
+      {list.length ? (
+        <div className="event-grid rate">
+          <span>From</span>
+          <span>Rate %</span>
+          <span />
+          {list.map((e, i) => (
+            <Fragment key={i}>
+              <input
+                type="date"
+                aria-label="Rate change from"
+                value={e.from}
+                onChange={(ev) => set(i, { from: ev.target.value })}
+              />
+              <NumInput
+                value={e.annualRate * 100}
+                digits={2}
+                onChange={(n) => set(i, { annualRate: n / 100 })}
+              />
+              <button
+                type="button"
+                className="event-x"
+                aria-label="Remove rate change"
+                onClick={() => onChange(list.filter((_, j) => j !== i))}
+              >
+                ×
+              </button>
+            </Fragment>
+          ))}
+        </div>
+      ) : null}
+      <button
+        type="button"
+        className="event-add"
+        onClick={() =>
+          onChange([...list, { from: todayIso(), annualRate: list.at(-1)?.annualRate ?? currentRate }])
+        }
+      >
+        + Add a rate change
+      </button>
+    </div>
   );
 }
 
@@ -1424,9 +1488,11 @@ function HowToDoIt({
 function Detail({
   selected,
   household,
+  onTracked,
 }: {
   selected: ScenarioResult;
   household: Household;
+  onTracked: (trackerId: string) => void;
 }) {
   const cgtDelta = selected.exitCgt - selected.exitCgtIfLegacyDiscount;
 
@@ -1548,7 +1614,77 @@ function Detail({
         </ul>
       ) : null}
       <HowToDoIt selected={selected} household={household} />
+      <TrackThis selected={selected} household={household} onTracked={onTracked} />
     </section>
+  );
+}
+
+function TrackThis({
+  selected,
+  household,
+  onTracked,
+}: {
+  selected: ScenarioResult;
+  household: Household;
+  onTracked: (trackerId: string) => void;
+}) {
+  const [label, setLabel] = useState(selected.label);
+  const [start, setStart] = useState(household.assumptions.startDate.slice(0, 7));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => setLabel(selected.label), [selected.label]);
+
+  return (
+    <details className="assumptions plan">
+      <summary>
+        <Tip text="Accept this scenario as your plan. Its projection is frozen from the month you pick, and you log what really happens against it in Tracking.">
+          Track this plan
+        </Tip>
+      </summary>
+      <div className="grid-2" style={{ marginTop: "0.6rem" }}>
+        <Field label="Name" tip="What to call this plan in Tracking.">
+          <input value={label} onChange={(e) => setLabel(e.target.value)} />
+        </Field>
+        <Field
+          label="Starts"
+          tip="The month the lump goes in. The plan is projected from the first of this month, whatever start date the household has."
+        >
+          <input type="month" value={start} onChange={(e) => setStart(e.target.value)} />
+        </Field>
+      </div>
+      <p className="plan-tip">
+        Freezes today's household, rates and this split. Editing the household
+        later won't move the target; recorded pay and rate changes still show
+        up in the re-forecast.
+      </p>
+      <div className="actions">
+        <button
+          type="button"
+          disabled={busy || !start}
+          onClick={async () => {
+            setBusy(true);
+            setError(null);
+            try {
+              const v = await createTracker({
+                household,
+                allocation: selected.appliedAllocation,
+                scenarioLabel: selected.label,
+                label,
+                startDate: start,
+              });
+              onTracked(v.tracker.id);
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "Freezing…" : "Start tracking"}
+        </button>
+      </div>
+      {error ? <p className="warn-list">{error}</p> : null}
+    </details>
   );
 }
 
@@ -1834,25 +1970,6 @@ function MixerRow({
         onChange={onChange}
       />
     </>
-  );
-}
-
-function Stat({
-  label,
-  tip,
-  children,
-}: {
-  label: string;
-  tip: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="stat">
-      <dt>
-        <Tip text={tip}>{label}</Tip>
-      </dt>
-      <dd>{children}</dd>
-    </div>
   );
 }
 

@@ -16,6 +16,7 @@ import { cors } from "hono/cors";
 import fs from "node:fs";
 import path from "node:path";
 import { getDbPath, getJson, openDb, setJson } from "./db.js";
+import { registerTrackingRoutes } from "./tracking.js";
 
 let db = openDb();
 const app = new Hono();
@@ -97,6 +98,8 @@ app.post("/api/run", async (c) => {
   const report = runHousehold(household, extra);
   return c.json(report);
 });
+
+registerTrackingRoutes(app, { db: () => db, loadHousehold });
 
 if (serveWeb && webDistAbs) {
   const rel = path.relative(process.cwd(), webDistAbs) || ".";

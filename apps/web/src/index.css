@@ -795,3 +795,401 @@ details.plan h4:first-of-type {
   box-shadow: 0 10px 28px #0b102090;
   pointer-events: none;
 }
+
+/* ── View switch ─────────────────────────────────────────────────────────── */
+
+.mast-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.6rem;
+}
+
+.views {
+  display: flex;
+  border: 1px solid #5a6f9c;
+}
+
+.views button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #c5d0e4;
+  padding: 0.3rem 0.85rem;
+  font-size: 0.85rem;
+}
+
+.views button.on {
+  background: #e8eef6;
+  color: var(--indigo-deep);
+}
+
+.views button:focus-visible {
+  outline: 1px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* ── Dated pay and rate changes ──────────────────────────────────────────── */
+
+.events {
+  margin-top: 0.7rem;
+}
+
+.events-head {
+  margin: 0.9rem 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--indigo);
+}
+
+.event-grid {
+  display: grid;
+  gap: 0.3rem 0.5rem;
+  align-items: end;
+  font-size: 0.85rem;
+}
+
+.event-grid.pay {
+  grid-template-columns: minmax(7.5rem, 1.2fr) 1fr 1fr 1.4rem;
+}
+
+.event-grid.rate {
+  grid-template-columns: minmax(7.5rem, 1.2fr) 1fr 1.4rem;
+}
+
+.event-grid > span {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.event-grid input,
+.month-field input,
+.risu-row select,
+.chart-controls select,
+.month-form .field input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid var(--ink);
+  background: transparent;
+  padding: 0.15rem 0;
+  color: var(--ink);
+}
+
+.event-grid input:focus,
+.month-field input:focus {
+  outline: none;
+  border-bottom-color: var(--gold);
+}
+
+.event-x {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.15rem 0.2rem;
+}
+
+.event-x:hover {
+  color: var(--hanko);
+}
+
+.event-add {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--indigo);
+  font-size: 0.8rem;
+  padding: 0.35rem 0 0;
+}
+
+.event-add:hover {
+  text-decoration: underline;
+}
+
+/* ── Tracking ────────────────────────────────────────────────────────────── */
+
+.tracker-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.tracker-list button {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: #edf2ee;
+  padding: 0.5rem 0.6rem;
+  color: var(--ink);
+  display: grid;
+  gap: 0.1rem;
+}
+
+.tracker-list button.on {
+  border-color: var(--indigo);
+  box-shadow: inset 3px 0 0 var(--indigo);
+  background: #f4f7f5;
+}
+
+.tracker-name {
+  font-family: var(--font-display);
+  font-size: 1rem;
+}
+
+.tracker-sub {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.tracker-detail .delta {
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.chart-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  margin: 1rem 0 0.4rem;
+}
+
+.field.inline {
+  width: 13rem;
+}
+
+.chart-wrap.clickable {
+  cursor: pointer;
+}
+
+/* Recharts focuses an inner layer on mouse clicks; keep the ring for keyboard focus only. */
+.chart-wrap :focus:not(:focus-visible) {
+  outline: none;
+}
+
+.up-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.75rem;
+  margin-top: 1rem;
+}
+
+.up-next .events-head,
+.up-next .plan-tip {
+  margin: 0;
+}
+
+.up-next .event-add {
+  padding: 0;
+}
+
+.month-step {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--indigo);
+  width: 1.8rem;
+  height: 1.8rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0;
+}
+
+.month-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.logged {
+  margin-top: 1.1rem;
+}
+
+.logged ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+
+.logged li button {
+  appearance: none;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 7rem 1fr auto;
+  gap: 0.75rem;
+  align-items: baseline;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  padding: 0.4rem 0.3rem;
+  color: var(--ink);
+  font-size: 0.85rem;
+}
+
+.logged li button:hover {
+  background: #edf2ee;
+}
+
+.logged li button.on {
+  box-shadow: inset 3px 0 0 var(--gold);
+  background: #f4f7f5;
+}
+
+.logged-month {
+  font-family: var(--font-display);
+}
+
+.logged-what {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logged-gap {
+  font-variant-numeric: tabular-nums;
+}
+
+.logged-gap.neg {
+  color: var(--hanko);
+}
+
+.month-form {
+  margin-top: 1rem;
+  border: 1px solid var(--line);
+  background: #f4f7f5;
+  padding: 0.75rem 0.9rem 0.9rem;
+}
+
+.month-form-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.month-form-head h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.month-form-head .plan-tip {
+  flex: 1;
+  margin: 0 0 0 0.5rem;
+}
+
+.month-form-head {
+  flex-wrap: wrap;
+}
+
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 0.35rem 1.25rem;
+}
+
+.month-field {
+  display: grid;
+  grid-template-columns: 1fr 7.5rem 1.3rem;
+  grid-template-rows: auto auto;
+  column-gap: 0.4rem;
+  align-items: end;
+}
+
+.month-label {
+  font-size: 0.8rem;
+  color: var(--ink);
+}
+
+.month-field .month-plan {
+  grid-column: 2;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.month-field .event-x {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.month-field.stored .month-label::after {
+  content: " •";
+  color: var(--gold);
+}
+
+.month-form .field {
+  margin-top: 0.8rem;
+}
+
+.actions button.danger {
+  background: var(--hanko);
+}
+
+.actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.plan-table td.neg {
+  color: var(--hanko);
+}
+
+.replan-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.replan-list .check {
+  align-items: flex-start;
+}
+
+.risu-row {
+  display: grid;
+  grid-template-columns: 1fr 6.5rem 7.5rem;
+  gap: 0.5rem;
+  align-items: end;
+  margin-top: 0.4rem;
+}
+
+.risu-row:has(select:only-of-type) {
+  grid-template-columns: 1fr 7.5rem;
+}
+
+code {
+  font-size: 0.85em;
+  background: #d5dfd8;
+  padding: 0 0.2em;
+}
+
+@media (max-width: 700px) {
+  .month-field {
+    grid-template-columns: 1fr 6.5rem 1.3rem;
+  }
+
+  .mast {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .mast-right {
+    align-items: flex-start;
+  }
+
+  .mast-aside {
+    text-align: left;
+  }
+}

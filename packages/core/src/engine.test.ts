@@ -247,8 +247,10 @@ describe("debt recycle deduction", () => {
         remainingYears: 25,
         interestOnly: true,
       },
+      // Starts on 1 July so each plan year is one financial year.
       assumptions: defaultAssumptions({
         ...zeroMarket,
+        startDate: "2026-07-01",
         investmentLoanRate: 0.06,
       }),
     });
@@ -279,8 +281,10 @@ describe("debt recycle deduction", () => {
         remainingYears: 25,
         interestOnly: true,
       },
+      // Starts on 1 July so each plan year is one financial year.
       assumptions: defaultAssumptions({
         ...zeroMarket,
+        startDate: "2026-07-01",
         investmentLoanRate: 0.06,
       }),
     });
@@ -633,7 +637,10 @@ describe("income growth", () => {
     const r = runScenario(h, def("o", { offset: h.lumpSum }));
     const intoFund = (n: number) => n * (1 - h.assumptions.concessionalContributionsTax);
     expect(r.superYou).toBeCloseTo(
-      h.you.superBalance + intoFund(10_000) + intoFund(11_000),
+      // Growth steps each 1 July: Sep–Jun at 10k, a full FY at 11k, then
+      // Jul–Aug at 12.1k.
+      h.you.superBalance +
+        intoFund((10 * 10_000) / 12 + 11_000 + (2 * 12_100) / 12),
       0,
     );
   });

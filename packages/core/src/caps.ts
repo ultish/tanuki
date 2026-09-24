@@ -20,11 +20,15 @@ export function concessionalCommittedThisFy(person: Person): number {
   );
 }
 
-export function concessionalRoom(person: Person, assumptions: Assumptions): number {
+export function concessionalRoom(
+  person: Person,
+  assumptions: Assumptions,
+  committed = concessionalCommittedThisFy(person),
+): number {
   const cap =
     assumptions.concessionalCap +
     Math.max(0, person.unusedConcessionalCarryForward) -
-    concessionalCommittedThisFy(person);
+    committed;
   const againstIncome = Math.max(0, person.taxableIncome);
   return Math.max(0, Math.min(cap, againstIncome));
 }

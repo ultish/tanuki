@@ -16,6 +16,7 @@ REMOTE_APP="${DEPLOY_REMOTE_APP:-tanuki}"
 REMOTE_DATA="${DEPLOY_REMOTE_DATA:-tanuki-data}"
 PORT="${DEPLOY_PORT:-8790}"
 IMAGE="${DEPLOY_IMAGE:-localhost/tanuki:latest}"
+RISU_URL="${DEPLOY_RISU_URL:-http://risu.hana-server}"
 DRY_RUN=0
 
 usage() {
@@ -31,6 +32,7 @@ Env:
   DEPLOY_REMOTE_APP    remote source dir   (default: tanuki)
   DEPLOY_REMOTE_DATA   remote sqlite dir   (default: tanuki-data)
   DEPLOY_IMAGE         image tag           (default: localhost/tanuki:latest)
+  DEPLOY_RISU_URL      risu's HTTP API     (default: http://risu.hana-server)
 EOF
 }
 
@@ -121,6 +123,7 @@ Environment=HOST=0.0.0.0
 Environment=SERVE_WEB=1
 Environment=NODE_ENV=production
 Environment=WEB_DIST_PATH=/app/apps/web/dist
+Environment=RISU_URL=${RISU_URL}
 
 [Service]
 Restart=always

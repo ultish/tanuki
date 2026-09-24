@@ -1,6 +1,6 @@
 import { FY_2026_27 } from "./caps.js";
 import { round2 } from "./tax.js";
-import type { Assumptions, Household, Person } from "./types.js";
+import type { Assumptions, Household, PayEvent, Person, RateEvent } from "./types.js";
 
 /** Legislated Super Guarantee rate default, FY2026-27. */
 const DEFAULT_SG_RATE_PERCENT = 12;
@@ -121,7 +121,13 @@ export function mergeHousehold(
     lumpSum: num(p.lumpSum, base.lumpSum),
     you: mergePerson(base.you, p.you, "you"),
     spouse: mergePerson(base.spouse, p.spouse, "spouse"),
-    loan: { ...base.loan, ...(p.loan ?? {}) },
+    loan: (() => {
+      const loan = { ...base.loan, ...(p.loan ?? {}) };
+      const rateEvents = cleanRateEvents(loan.rateEvents);
+      if (rateEvents) loan.rateEvents = rateEvents;
+      else delete loan.rateEvents;
+      return loan;
+    })(),
     assumptions: {
       ...base.assumptions,
       ...(p.assumptions ?? {}),
@@ -180,9 +186,41 @@ function mergePerson(
     extraConcessionalThisFy: annualFromFortnightly(extraConcessionalFortnightly),
   };
   delete (next as { concessionalUsedThisFy?: number }).concessionalUsedThisFy;
+  const payEvents = cleanPayEvents(next.payEvents);
+  if (payEvents) next.payEvents = payEvents;
+  else delete next.payEvents;
   return next;
 }
 
 function num(v: unknown, fallback: number): number {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Drop malformed events and keep them in date order. Undefined when none are left. */
+function cleanPayEvents(raw: unknown): PayEvent[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: PayEvent[] = [];
+  for (const e of raw as Partial<PayEvent>[]) {
+    if (typeof e?.from !== "string" || !ISO_DATE.test(e.from)) continue;
+    if (typeof e.taxableIncome !== "number" || !Number.isFinite(e.taxableIncome)) continue;
+    const ev: PayEvent = { from: e.from, taxableIncome: e.taxableIncome };
+    if (typeof e.salary === "number" && Number.isFinite(e.salary)) ev.salary = e.salary;
+    out.push(ev);
+  }
+  out.sort((a, b) => a.from.localeCompare(b.from));
+  return out.length ? out : undefined;
+}
+
+function cleanRateEvents(raw: unknown): RateEvent[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: RateEvent[] = [];
+  for (const e of raw as Partial<RateEvent>[]) {
+    if (typeof e?.from !== "string" || !ISO_DATE.test(e.from)) continue;
+    if (typeof e.annualRate !== "number" || !Number.isFinite(e.annualRate)) continue;
+    out.push({ from: e.from, annualRate: e.annualRate });
+  }
+  out.sort((a, b) => a.from.localeCompare(b.from));
+  return out.length ? out : undefined;
 }

@@ -1,3 +1,15 @@
+import type {
+  ActualMonth,
+  Flows,
+  HoldingKey,
+  PayEvent,
+  RateEvent,
+  RisuLink,
+  TrackerView,
+} from "@tanuki/core";
+
+export type { ActualMonth, Flows, HoldingKey, PayEvent, RateEvent, RisuLink, TrackerView };
+
 export type Person = {
   id: "you" | "spouse";
   label: string;
@@ -12,6 +24,7 @@ export type Person = {
   extraConcessionalThisFy: number;
   unusedConcessionalCarryForward: number;
   age: number;
+  payEvents?: PayEvent[];
 };
 
 export type Loan = {
@@ -22,6 +35,7 @@ export type Loan = {
   monthlyRepayment?: number;
   interestOnly: boolean;
   restrictedOffset?: number;
+  rateEvents?: RateEvent[];
 };
 
 export type AssetSleeve = {
@@ -86,10 +100,14 @@ export type YearRow = {
 
 export type MonthRow = {
   month: number;
+  date: string;
   year: number;
   netWealth: number;
   superTotal: number;
+  superYou: number;
   taxableTotal: number;
+  shares: Record<HoldingKey, number>;
+  flows: Flows;
   homeLoan: number;
   investmentLoan: number;
   offset: number;
@@ -182,3 +200,93 @@ export function runPlan(
     body: JSON.stringify({ household, custom }),
   }).then((r) => json<RunReport>(r));
 }
+
+async function send<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method,
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let message = text || res.statusText;
+    let detail: unknown;
+    try {
+      detail = JSON.parse(text);
+      if (detail && typeof detail === "object" && "error" in detail) {
+        message = String((detail as { error: unknown }).error);
+      }
+    } catch {
+      /* not JSON */
+    }
+    throw Object.assign(new Error(message), { detail });
+  }
+  return res.json() as Promise<T>;
+}
+
+export type TrackerSummary = {
+  id: string;
+  label: string;
+  createdAt: string;
+  scenarioLabel: string;
+  startDate: string;
+  parentId?: string;
+  planSince: string;
+  months: number;
+};
+
+export type OpeningSummary = {
+  date: string;
+  offset: number;
+  homeLoan: number;
+  investmentLoan: number;
+  superYou: number;
+  superSpouse: number;
+  shares: number;
+  deployable: number;
+};
+
+export const listTrackers = () => send<TrackerSummary[]>("GET", "/api/trackers");
+export const fetchTracker = (id: string) =>
+  send<TrackerView>("GET", `/api/trackers/${id}`);
+export const createTracker = (body: {
+  household: Household;
+  allocation: Allocation;
+  scenarioLabel: string;
+  label: string;
+  startDate: string;
+}) => send<TrackerView>("POST", "/api/trackers", body);
+export const setTrackerRisu = (id: string, portfolios: number[]) =>
+  send<TrackerView>("PUT", `/api/trackers/${id}/risu`, { portfolios });
+export const deleteTracker = (id: string) =>
+  send<{ ok: true }>("DELETE", `/api/trackers/${id}`);
+export const fetchOpening = (id: string, at: string) =>
+  send<OpeningSummary>("GET", `/api/trackers/${id}/opening?at=${at}`);
+export const replanPreview = (id: string, at: string, deploy: number) =>
+  send<RunReport>("POST", `/api/trackers/${id}/replan/preview`, { at, deploy });
+export const replan = (
+  id: string,
+  body: { at: string; deploy: number; allocation: Allocation; scenarioLabel: string; label: string },
+) => send<TrackerView>("POST", `/api/trackers/${id}/replan`, body);
+
+export const saveActual = (month: string, entry: Omit<ActualMonth, "date">) =>
+  send<ActualMonth | null>("PUT", `/api/actuals/${month}`, entry);
+export const clearActual = (month: string) =>
+  send<{ ok: true }>("DELETE", `/api/actuals/${month}`);
+export const pullRisu = (month: string) =>
+  send<{ entry: ActualMonth; warnings: string[] }>("POST", `/api/actuals/${month}/risu`);
+
+export type RisuLinkState = RisuLink & { configured: boolean; url: string | null };
+export type RisuTicker = {
+  key: string;
+  ticker: string;
+  portfolios: number[];
+  sleeve: "growth" | "income" | null;
+};
+
+export const fetchRisuLink = () => send<RisuLinkState>("GET", "/api/risu/link");
+export const saveRisuLink = (link: RisuLink) =>
+  send<RisuLink>("PUT", "/api/risu/link", link);
+export const fetchRisuPortfolios = () =>
+  send<{ id: number; name: string }[]>("GET", "/api/risu/portfolios");
+export const fetchRisuTickers = () => send<RisuTicker[]>("GET", "/api/risu/tickers");
