@@ -542,6 +542,34 @@ details.assumptions summary {
   font-weight: 600;
 }
 
+/* Who holds it, under a stat's total — one owner per line. */
+.stat-split {
+  display: block;
+  margin-top: 0.2rem;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.stat-split {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.6rem;
+}
+
+/* Each line's label and amount fall into the grid's two columns. */
+.stat-split > span {
+  display: contents;
+}
+
+.stat-split b {
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
 .warn-list,
 .note-list {
   margin: 0.4rem 0 0.8rem;

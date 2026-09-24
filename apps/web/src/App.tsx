@@ -1938,14 +1938,20 @@ function Detail({
         >
           {money(selected.investmentOutsideSuper)}
           {selected.taxableYou > 1 && selected.taxableSpouse > 1 ? (
-            <span className="sub">
-              {" "}
-              you {money(selected.taxableYou)}, spouse {money(selected.taxableSpouse)}
+            <span className="stat-split">
+              <span>
+                <span>You</span>
+                <b>{money(selected.taxableYou)}</b>
+              </span>
+              <span>
+                <span>Spouse</span>
+                <b>{money(selected.taxableSpouse)}</b>
+              </span>
             </span>
-          ) : selected.taxableSpouse > 1 && selected.taxableYou <= 1 ? (
-            <span className="sub"> in spouse's name</span>
+          ) : selected.taxableSpouse > 1 ? (
+            <span className="stat-split">All in spouse's name</span>
           ) : selected.taxableYou > 1 ? (
-            <span className="sub"> in your name</span>
+            <span className="stat-split">All in your name</span>
           ) : null}
         </Stat>
         <Stat
