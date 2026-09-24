@@ -1232,7 +1232,7 @@ function RisuLinkPanel({
       {!link.configured ? (
         <p className="plan-tip">
           Set <code>RISU_URL</code> on the tanuki server (on hana-server,{" "}
-          <code>http://risu.hana-server</code>) to link risu.
+          <code>http://127.0.0.1:8788</code>) to link risu.
         </p>
       ) : (
         <>

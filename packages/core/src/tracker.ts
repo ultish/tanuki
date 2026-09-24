@@ -100,14 +100,23 @@ function withStart(h: Household, startDate: string): Household {
 }
 
 /**
- * Recorded pay and rate changes are facts, so they apply to every tracker.
+ * Recorded pay changes, new leases and rate changes are facts, so they
+ * apply to every tracker.
  * Everything else in the frozen household stays as accepted.
  */
 function withRecordedEvents(frozen: Household, current: Household): Household {
   return {
     ...frozen,
-    you: { ...frozen.you, payEvents: current.you.payEvents },
-    spouse: { ...frozen.spouse, payEvents: current.spouse.payEvents },
+    you: {
+      ...frozen.you,
+      payEvents: current.you.payEvents,
+      laterLeases: current.you.laterLeases,
+    },
+    spouse: {
+      ...frozen.spouse,
+      payEvents: current.spouse.payEvents,
+      laterLeases: current.spouse.laterLeases,
+    },
     loan: { ...frozen.loan, rateEvents: current.loan.rateEvents },
   };
 }

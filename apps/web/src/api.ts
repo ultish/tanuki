@@ -1,5 +1,6 @@
 import type {
   ActualMonth,
+  LaterLease,
   Flows,
   HoldingKey,
   PayEvent,
@@ -8,7 +9,16 @@ import type {
   TrackerView,
 } from "@tanuki/core";
 
-export type { ActualMonth, Flows, HoldingKey, PayEvent, RateEvent, RisuLink, TrackerView };
+export type {
+  ActualMonth,
+  Flows,
+  HoldingKey,
+  LaterLease,
+  PayEvent,
+  RateEvent,
+  RisuLink,
+  TrackerView,
+};
 
 export type Person = {
   id: "you" | "spouse";
@@ -26,6 +36,7 @@ export type Person = {
   age: number;
   novatedLeaseFortnightly: number;
   novatedLeaseEndDate: string;
+  laterLeases?: LaterLease[];
   payEvents?: PayEvent[];
 };
 
@@ -73,6 +84,7 @@ export type Assumptions = {
   sweepIdleOffset: boolean;
   minimumCash: number;
   monthlyExpenses: number;
+  expenseInflationRate: number;
   annualHolidaySpend: number;
   holidayMonth: number;
   holidayFundOnTop: boolean;

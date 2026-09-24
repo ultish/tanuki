@@ -16,7 +16,9 @@ REMOTE_APP="${DEPLOY_REMOTE_APP:-tanuki}"
 REMOTE_DATA="${DEPLOY_REMOTE_DATA:-tanuki-data}"
 PORT="${DEPLOY_PORT:-8790}"
 IMAGE="${DEPLOY_IMAGE:-localhost/tanuki:latest}"
-RISU_URL="${DEPLOY_RISU_URL:-http://risu.hana-server}"
+# Every app on hana runs with Network=host, so risu is on localhost. Its
+# LAN name (risu.hana-server) doesn't resolve on hana itself.
+RISU_URL="${DEPLOY_RISU_URL:-http://127.0.0.1:8788}"
 DRY_RUN=0
 
 usage() {
@@ -32,7 +34,7 @@ Env:
   DEPLOY_REMOTE_APP    remote source dir   (default: tanuki)
   DEPLOY_REMOTE_DATA   remote sqlite dir   (default: tanuki-data)
   DEPLOY_IMAGE         image tag           (default: localhost/tanuki:latest)
-  DEPLOY_RISU_URL      risu's HTTP API     (default: http://risu.hana-server)
+  DEPLOY_RISU_URL      risu's HTTP API     (default: http://127.0.0.1:8788)
 EOF
 }
 

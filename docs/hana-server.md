@@ -23,3 +23,6 @@ in its own repo, `~/Developer/hana-server` — not here.
   works (the actual nightly `hana-backup.sh` already tries both at push time).
   If the LAN alias is stale (this Mac's IP drifts — it's DHCP, not reserved),
   Tailscale alone is enough; the timer still gets installed.
+- Tanuki reads risu over HTTP at `RISU_URL`, set by `deploy-hana.sh` to
+  `http://127.0.0.1:8788` (risu's port; all apps use host networking).
+  `risu.hana-server` does not resolve on hana itself, only on the LAN.

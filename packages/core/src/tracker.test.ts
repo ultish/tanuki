@@ -3,6 +3,7 @@ import { defaultAssumptions, defaultHousehold, defaultPerson } from "./defaults.
 import { simulate } from "./engine.js";
 import { mapRisuMonth, type RisuLink } from "./risu.js";
 import { pmt } from "./loan.js";
+import { incomeTax } from "./tax.js";
 import {
   createReplan,
   createTracker,
@@ -143,6 +144,47 @@ describe("dated rate events", () => {
     expect(first.homeInterest).toBe(2_400);
     expect(first.homeLoan).toBeCloseTo(480_000 - (pmt(480_000, 0.06, 20) - 2_400), 2);
     expect(r.homeLoan).toBeCloseTo(0, 2);
+  });
+});
+
+describe("expense inflation", () => {
+  it("grows living costs and the holiday each plan year", () => {
+    const h = still({
+      assumptions: {
+        horizonYears: 2,
+        monthlyExpenses: 1_000,
+        annualHolidaySpend: 1_200,
+        holidayMonth: 12,
+        expenseInflationRate: 0.1,
+      },
+    });
+    const r = simulate(h, def({ offset: 250_000 })).result;
+    // Year one (Sep 26–Aug 27): 12 × $1,000 + a $1,200 December trip.
+    // Year two: everything 10% dearer.
+    expect(r.offset).toBeCloseTo(330_000 - (12_000 + 1_200) - (13_200 + 1_320), 2);
+  });
+
+  it("at 0% changes nothing", () => {
+    const flat = still({ assumptions: { horizonYears: 2, monthlyExpenses: 1_000 } });
+    const r = simulate(flat, def({ offset: 250_000 })).result;
+    expect(r.offset).toBeCloseTo(330_000 - 24_000, 2);
+  });
+});
+
+describe("later novated leases", () => {
+  it("lowers taxable income for the months the new lease runs", () => {
+    const h = still({
+      you: defaultPerson("you", {
+        taxableIncome: 100_000,
+        laterLeases: [{ from: "2027-03-01", to: "2028-03-01", fortnightly: 500 }],
+      }),
+      assumptions: { horizonYears: 2 },
+    });
+    const r = simulate(h, def({ offset: 250_000 })).result;
+    // Six of the lease's months fall in each plan year: $13,000 a year × 6/12.
+    const pay = (income: number) => (income - incomeTax(income, 0.02)) / 12;
+    expect(r.months[0]!.afterTaxPay).toBeCloseTo(pay(100_000 - 6_500), 2);
+    expect(r.months[12]!.afterTaxPay).toBeCloseTo(pay(100_000 - 6_500), 2);
   });
 });
 

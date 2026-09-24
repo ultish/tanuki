@@ -122,9 +122,13 @@ interest deduction traceable, so the portfolio split is worth having anyway.
   `incomeGrowthRate` keeps compounding from it on plan-year anniversaries.
   Pay lands in the month it changes; that year's tax base is the average of
   its twelve months.
+- `Person.laterLeases`: a novated lease that starts later (the next car).
+  While it runs its payment is a pre-tax deduction, so taxable income drops
+  by it for the months it's active — the reverse of the current lease's
+  add-back when it ends.
 
 Events are facts, so every tracker's re-forecast uses the household's
-current events. Everything else in a tracker's frozen household stays as
+current events (pay changes, later leases, rate changes). Everything else in a tracker's frozen household stays as
 accepted. The chart's third line, **the plan at today's rates**, is the
 original plan re-run with the recorded events and nothing logged: the gap to
 the plan is the world moving, the gap to the re-forecast is what you did.
@@ -145,6 +149,8 @@ without changing what it computes for an ordinary scenario:
   closing position carries them.
 - `Person.payEvents` and `Loan.rateEvents` — only people and loans that have
   events take the event-aware path; growth stays on plan-year anniversaries.
+- `Person.laterLeases` and `Assumptions.expenseInflationRate` (living costs
+  and the holiday fund grow each plan year) — empty and 0 by default.
 
 With none of these in play the output is identical to `main`'s engine:
 checked field by field across every preset and stack (361 scenarios, seven
@@ -208,9 +214,11 @@ instrument, so they match its Holdings totals.
 ## Deployment
 
 `scripts/deploy-hana.sh` sets `RISU_URL` in the Quadlet, default
-`http://risu.hana-server` (override with `DEPLOY_RISU_URL`). Not yet verified
-that the name resolves from inside the tanuki container; if it doesn't, point
-it at risu's Tailscale address.
+`http://127.0.0.1:8788` (override with `DEPLOY_RISU_URL`). Every app on
+hana-server runs with `Network=host`, so tanuki reaches risu on localhost.
+Checked from inside the tanuki container on 2026-09-25: `127.0.0.1:8788`
+answers (health and `/api/lots`); `risu.hana-server` does not resolve on
+hana itself — that name is only for machines on the LAN.
 
 ## Decided
 

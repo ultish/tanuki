@@ -47,6 +47,13 @@ async function risuGet<T>(path: string): Promise<T> {
   if (!res.ok) {
     throw new RisuError(`Risu answered ${res.status} for ${path}: ${await res.text()}`);
   }
+  // An older risu without the route serves its web app for unknown paths,
+  // with a 200 — so check we actually got data back.
+  if (!(res.headers.get("content-type") ?? "").includes("application/json")) {
+    throw new RisuError(
+      `Risu at ${base} doesn't have ${path.split("?")[0]} yet — it needs the version with the parcels route deployed.`,
+    );
+  }
   return (await res.json()) as T;
 }
 

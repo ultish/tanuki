@@ -42,6 +42,7 @@ export {
   defaultAssumptions,
   defaultHousehold,
   defaultPerson,
+  laterLeaseDeduction,
   leaseAddback,
   mergeHousehold,
 } from "./defaults.js";
@@ -92,6 +93,7 @@ export {
   type HoldingKey,
   type OpeningLot,
   type OpeningPosition,
+  type LaterLease,
   type PayEvent,
   type RateEvent,
   type RisuLot,

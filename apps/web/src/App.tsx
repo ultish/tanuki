@@ -17,6 +17,7 @@ import {
   fetchMeta,
   runPlan,
   saveHousehold,
+  type LaterLease,
   type PayEvent,
   type RateEvent,
   type Allocation,
@@ -471,6 +472,10 @@ function HouseholdForm({
           </Tip>
         </h3>
         <PersonFields person={h.you} onChange={setYou} />
+        <LaterLeasesEditor
+          person={h.you}
+          onChange={(laterLeases) => setYou({ laterLeases })}
+        />
         <PayEventsEditor
           person={h.you}
           onChange={(payEvents) => setYou({ payEvents })}
@@ -490,6 +495,10 @@ function HouseholdForm({
           </Tip>
         </h3>
         <PersonFields person={h.spouse} onChange={setSpouse} />
+        <LaterLeasesEditor
+          person={h.spouse}
+          onChange={(laterLeases) => setSpouse({ laterLeases })}
+        />
         <PayEventsEditor
           person={h.spouse}
           onChange={(payEvents) => setSpouse({ payEvents })}
@@ -590,6 +599,16 @@ function HouseholdForm({
           <NumInput
             value={h.assumptions.monthlyExpenses}
             onChange={(n) => setA({ monthlyExpenses: n })}
+          />
+        </Field>
+        <Field
+          label="Expense inflation % p.a."
+          tip="How fast living expenses and the holiday fund rise, stepped once a plan year like income growth. At 0 they stay the same dollar amount for the whole horizon — which flatters the result if your pay is growing."
+        >
+          <NumInput
+            value={(h.assumptions.expenseInflationRate ?? 0) * 100}
+            digits={1}
+            onChange={(n) => setA({ expenseInflationRate: n / 100 })}
           />
         </Field>
         <Field
@@ -861,6 +880,74 @@ function PayEventsEditor({
         }
       >
         + Add a pay change
+      </button>
+    </div>
+  );
+}
+
+function LaterLeasesEditor({
+  person,
+  onChange,
+}: {
+  person: Person;
+  onChange: (leases: LaterLease[]) => void;
+}) {
+  const list = person.laterLeases ?? [];
+  const set = (i: number, patch: Partial<LaterLease>) =>
+    onChange(list.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  const addDefault = (): LaterLease => {
+    // Straight after the current lease, same payment, a typical 3-year term.
+    const from = person.novatedLeaseEndDate || todayIso();
+    const y = Number(from.slice(0, 4)) + 3;
+    return {
+      from,
+      to: `${y}${from.slice(4)}`,
+      fortnightly: person.novatedLeaseFortnightly || 0,
+    };
+  };
+  return (
+    <div className="events">
+      <p className="events-head">
+        <Tip text="A novated lease that starts later — the next car, say. While it runs, its payment comes out before tax, so taxable income drops by it (the reverse of the current lease ending). Trackers pick these up in their re-forecast, like pay changes.">
+          Next novated leases
+        </Tip>
+      </p>
+      {list.length ? (
+        <div className="event-grid lease">
+          <span>Starts</span>
+          <span>Ends</span>
+          {list.map((l, i) => (
+            <Fragment key={i}>
+              <input
+                type="date"
+                aria-label="Lease starts"
+                value={l.from}
+                onChange={(ev) => set(i, { from: ev.target.value })}
+              />
+              <input
+                type="date"
+                aria-label="Lease ends"
+                value={l.to}
+                onChange={(ev) => set(i, { to: ev.target.value })}
+              />
+              <div className="lease-amount">
+                <NumInput value={l.fortnightly} onChange={(n) => set(i, { fortnightly: n })} />
+                <span>per fortnight, before tax</span>
+                <button
+                  type="button"
+                  className="event-x"
+                  aria-label="Remove lease"
+                  onClick={() => onChange(list.filter((_, j) => j !== i))}
+                >
+                  ×
+                </button>
+              </div>
+            </Fragment>
+          ))}
+        </div>
+      ) : null}
+      <button type="button" className="event-add" onClick={() => onChange([...list, addDefault()])}>
+        + Add a lease
       </button>
     </div>
   );
@@ -1536,7 +1623,10 @@ function FlowPopover({
         {month.investmentInterest > 0.5 ? (
           <Row label="Investment loan interest" value={-month.investmentInterest} />
         ) : null}
-        <Row label="Living expenses" value={-a.monthlyExpenses} />
+        <Row
+          label="Living expenses"
+          value={-a.monthlyExpenses * Math.pow(1 + (a.expenseInflationRate ?? 0), month.year - 1)}
+        />
         {month.holidaySpend > 0.5 ? (
           <Row label="Holiday" value={-month.holidaySpend} />
         ) : (

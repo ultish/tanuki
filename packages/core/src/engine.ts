@@ -4,7 +4,7 @@ import {
   nccRoom,
   remainingAfter,
 } from "./caps.js";
-import { leaseAddback } from "./defaults.js";
+import { laterLeaseDeduction, leaseAddback } from "./defaults.js";
 import { paySchedule } from "./income.js";
 import { pmt, stepHomeLoan } from "./loan.js";
 import { buildPresets } from "./presets.js";
@@ -16,6 +16,7 @@ import {
 import {
   addMonthsIso,
   division293Tax,
+  monthsBetweenIso,
   estimateHybridCgt,
   frankingCredits,
   incomeTax,
@@ -517,7 +518,11 @@ export function simulate(
     const base = sched
       ? meanOverYear(sched.taxableAt, yearIndex)
       : person.taxableIncome * Math.pow(1 + incomeGrowth, yearIndex);
-    return base + leaseAddback(person, start, yearIndex);
+    return (
+      base +
+      leaseAddback(person, start, yearIndex) -
+      laterLeaseDeduction(person, start, yearIndex)
+    );
   };
 
   /** Taxable income in force this month, as an annual rate — for monthly pay. */
@@ -525,7 +530,11 @@ export function simulate(
     const sched = pay[person.id];
     const yearIndex = Math.floor(m / 12);
     if (!sched) return grownIncome(person, yearIndex);
-    return sched.taxableAt(m) + leaseAddback(person, start, yearIndex);
+    return (
+      sched.taxableAt(m) +
+      leaseAddback(person, start, yearIndex) -
+      laterLeaseDeduction(person, start, yearIndex)
+    );
   };
 
   // Concessional contributions logged after month one, by person and plan
@@ -617,10 +626,17 @@ export function simulate(
    * on top of the cash buffer rather than out of it, so a holiday spends
    * what was saved for it instead of raiding the emergency money.
    */
+  /** Living costs and the holiday fund grow each plan year by expenseInflationRate. */
+  const expenseGrowth = (iso: string): number =>
+    Math.pow(
+      1 + (a.expenseInflationRate ?? 0),
+      Math.floor(Math.max(0, monthsBetweenIso(start, iso)) / 12),
+    );
+
   const holidayProvisionFor = (iso: string): number => {
     if (a.annualHolidaySpend <= 0) return 0;
     const monthsSaving = (Number(iso.slice(5, 7)) - holidayMonth + 12) % 12;
-    return a.annualHolidaySpend * (monthsSaving / 12);
+    return a.annualHolidaySpend * expenseGrowth(iso) * (monthsSaving / 12);
   };
 
   const sweepIdleOffset = (acquiredDate: string, holidayProvision = 0) => {
@@ -1034,7 +1050,9 @@ export function simulate(
     // a calendar month rather than to the anniversary of whenever the plan
     // happened to start.
     const holidaySpendThisMonth =
-      Number(prevDate.slice(5, 7)) === holidayMonth ? a.annualHolidaySpend : 0;
+      Number(prevDate.slice(5, 7)) === holidayMonth
+        ? a.annualHolidaySpend * expenseGrowth(prevDate)
+        : 0;
 
     // Everything the household earns and spends runs through the pool. The
     // investment-loan interest has to actually be paid, not just deducted —
@@ -1044,7 +1062,7 @@ export function simulate(
       payThisMonth -
       home.payment -
       invInterest -
-      a.monthlyExpenses -
+      a.monthlyExpenses * expenseGrowth(prevDate) -
       holidaySpendThisMonth;
     state.cash += monthSpareCash;
     // Snapshot for the month's cash-flow breakdown: where the offset stood

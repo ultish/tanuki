@@ -1,6 +1,13 @@
 import { FY_2026_27 } from "./caps.js";
 import { monthsBetweenIso, round2 } from "./tax.js";
-import type { Assumptions, Household, PayEvent, Person, RateEvent } from "./types.js";
+import type {
+  Assumptions,
+  Household,
+  LaterLease,
+  PayEvent,
+  Person,
+  RateEvent,
+} from "./types.js";
 
 /** Legislated Super Guarantee rate default, FY2026-27. */
 const DEFAULT_SG_RATE_PERCENT = 12;
@@ -43,6 +50,30 @@ export function leaseAddback(
   );
   const annualLease = person.novatedLeaseFortnightly * 26;
   return round2(annualLease * (1 - monthsActiveThisYear / 12));
+}
+
+/**
+ * Pre-tax deduction from leases that start later (`Person.laterLeases`),
+ * for plan year `yearIndex`, prorated for the months each is active. 0 for
+ * a person with none.
+ */
+export function laterLeaseDeduction(
+  person: Pick<Person, "laterLeases">,
+  startDate: string,
+  yearIndex: number,
+): number {
+  let total = 0;
+  for (const l of person.laterLeases ?? []) {
+    if (!(l.fortnightly > 0)) continue;
+    const from = monthsBetweenIso(startDate, l.from);
+    const to = monthsBetweenIso(startDate, l.to);
+    const months = Math.max(
+      0,
+      Math.min(to, yearIndex * 12 + 12) - Math.max(from, yearIndex * 12),
+    );
+    total += l.fortnightly * 26 * (months / 12);
+  }
+  return round2(total);
 }
 
 export function defaultPerson(id: Person["id"], overrides: Partial<Person> = {}): Person {
@@ -130,6 +161,7 @@ export function defaultAssumptions(overrides: Partial<Assumptions> = {}): Assump
     sweepIdleOffset: true,
     minimumCash: 0,
     monthlyExpenses: 0,
+    expenseInflationRate: 0,
     annualHolidaySpend: 0,
     holidayMonth: 1,
     holidayFundOnTop: true,
@@ -233,6 +265,9 @@ function mergePerson(
   const payEvents = cleanPayEvents(next.payEvents);
   if (payEvents) next.payEvents = payEvents;
   else delete next.payEvents;
+  const laterLeases = cleanLaterLeases(next.laterLeases);
+  if (laterLeases) next.laterLeases = laterLeases;
+  else delete next.laterLeases;
   return next;
 }
 
@@ -252,6 +287,19 @@ function cleanPayEvents(raw: unknown): PayEvent[] | undefined {
     const ev: PayEvent = { from: e.from, taxableIncome: e.taxableIncome };
     if (typeof e.salary === "number" && Number.isFinite(e.salary)) ev.salary = e.salary;
     out.push(ev);
+  }
+  out.sort((a, b) => a.from.localeCompare(b.from));
+  return out.length ? out : undefined;
+}
+
+function cleanLaterLeases(raw: unknown): LaterLease[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: LaterLease[] = [];
+  for (const l of raw as Partial<LaterLease>[]) {
+    if (typeof l?.from !== "string" || !ISO_DATE.test(l.from)) continue;
+    if (typeof l.to !== "string" || !ISO_DATE.test(l.to) || l.to <= l.from) continue;
+    if (typeof l.fortnightly !== "number" || !Number.isFinite(l.fortnightly)) continue;
+    out.push({ from: l.from, to: l.to, fortnightly: Math.max(0, l.fortnightly) });
   }
   out.sort((a, b) => a.from.localeCompare(b.from));
   return out.length ? out : undefined;

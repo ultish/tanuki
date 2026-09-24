@@ -51,12 +51,28 @@ export type Person = {
   /** ISO yyyy-mm-dd the lease ends. Empty string = no lease. */
   novatedLeaseEndDate: string;
   /**
+   * Novated leases that start later — typically the next car once the
+   * current lease ends. While one is active its payment is a pre-tax
+   * deduction, so taxable income drops by it, the reverse of the add-back
+   * when the current lease ends.
+   */
+  laterLeases?: LaterLease[];
+  /**
    * Real pay changes, each "my taxable income is X from date Y". An event
    * resets the base; `Assumptions.incomeGrowthRate` keeps compounding from
    * it on the plan's anniversaries. Events dated before a plan's start still
    * apply, so a rise logged after `taxableIncome` was last edited is not lost.
    */
   payEvents?: PayEvent[];
+};
+
+export type LaterLease = {
+  /** ISO yyyy-mm-dd the lease starts. */
+  from: string;
+  /** ISO yyyy-mm-dd the lease ends. */
+  to: string;
+  /** Pre-tax lease payment, per fortnight. */
+  fortnightly: number;
 };
 
 export type PayEvent = {
@@ -182,6 +198,12 @@ export type Assumptions = {
    * the cash pool every month, like any other cost.
    */
   monthlyExpenses: number;
+  /**
+   * How fast living expenses and the holiday fund grow, per year — stepped
+   * on each plan-year anniversary, like `incomeGrowthRate`. 0 keeps them
+   * flat in dollars for the whole horizon.
+   */
+  expenseInflationRate: number;
   /**
    * A lump discretionary cost — a holiday, typically — drawn from the cash
    * pool once a year, in holidayMonth. Saved for in advance: a twelfth is
