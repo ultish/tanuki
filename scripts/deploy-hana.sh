@@ -96,6 +96,7 @@ echo "==> build + start on ${HOST}"
 # shellcheck disable=SC2087
 ssh -o BatchMode=yes "$HOST" \
   env PORT="$PORT" IMAGE="$IMAGE" REMOTE_APP="$REMOTE_APP" REMOTE_DATA="$REMOTE_DATA" \
+    RISU_URL="$RISU_URL" \
   bash -s <<'REMOTE'
 set -euo pipefail
 
