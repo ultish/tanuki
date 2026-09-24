@@ -10,7 +10,7 @@ export {
   type RunOptions,
   type Simulation,
 } from "./engine.js";
-export { fyOf, incomeSchedule, type IncomeRates, type IncomeSchedule } from "./income.js";
+export { paySchedule, type PaySchedule } from "./income.js";
 export {
   createReplan,
   createTracker,
@@ -42,6 +42,7 @@ export {
   defaultAssumptions,
   defaultHousehold,
   defaultPerson,
+  leaseAddback,
   mergeHousehold,
 } from "./defaults.js";
 export {
@@ -88,7 +89,6 @@ export {
   type ActualMonth,
   type FlowKey,
   type Flows,
-  type FyTaxState,
   type HoldingKey,
   type OpeningLot,
   type OpeningPosition,

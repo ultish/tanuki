@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Area,
   AreaChart,
@@ -568,7 +569,7 @@ function HouseholdForm({
 
       <div className="section">
         <h3>
-          <Tip text="Above the restricted floor (or zero if you haven't set one), offset cash keeps buying growth shares even while the home loan still has a balance — trading the guaranteed home-loan-rate interest save for the sleeve's return instead. The loan pays down slower as a result, since less of it is offset. The split itself is not offset.">
+          <Tip text="Offset builds up to whichever is bigger — enough to fully cover the home loan (so you stop paying home-loan interest), or the restricted floor. Only once it's past that does the excess get invested. The split itself is not offset.">
             Idle offset
           </Tip>
         </h3>
@@ -578,8 +579,74 @@ function HouseholdForm({
             checked={h.assumptions.sweepIdleOffset !== false}
             onChange={(e) => setA({ sweepIdleOffset: e.target.checked })}
           />
-          <Tip text="Each month, offset above the restricted floor buys growth shares in your spouse's name, even if that's below the home loan balance. Unlevered. Turn this off to leave the cash sitting in the offset instead.">
-            Invest offset above the restricted floor
+          <Tip text="Each month, offset above the home loan balance (or the restricted floor, whichever is bigger) buys growth shares in your spouse's name. Unlevered. Turn this off to leave the cash sitting in the offset instead.">
+            Invest offset above loan parity
+          </Tip>
+        </label>
+        <Field
+          label="Living expenses, per month"
+          tip="Everything else — food, bills, kids, fun — not otherwise modelled. Comes out of the cash pool every month, along with the loan repayments and the investment-loan interest."
+        >
+          <NumInput
+            value={h.assumptions.monthlyExpenses}
+            onChange={(n) => setA({ monthlyExpenses: n })}
+          />
+        </Field>
+        <Field
+          label="Holiday fund, per year"
+          tip="A lump discretionary cost — a holiday — taken out of the cash pool once a year, on top of monthly living expenses. It's saved for in advance — a twelfth is held back from investing each month — so the trip spends money set aside for it rather than eating into your minimum cash. Anything the pool can't cover on the day comes out of the offset, exactly like spending from your everyday account."
+        >
+          <NumInput
+            value={h.assumptions.annualHolidaySpend}
+            onChange={(n) => setA({ annualHolidaySpend: n })}
+          />
+        </Field>
+        <Field
+          label="Holiday month"
+          tip="Which calendar month the holiday fund comes out, every year, whenever the plan starts. Note the year-by-year rows show each year's last month, so picking December means every year row is a just-spent snapshot with the offset at its lowest."
+        >
+          <select
+            value={h.assumptions.holidayMonth}
+            onChange={(e) => setA({ holidayMonth: Number(e.target.value) })}
+          >
+            {MONTH_NAMES.map((name, i) => (
+              <option key={name} value={i + 1}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field
+          label="Holiday fund sits"
+          tip="On top: the offset carries parity with your loan plus whatever you've saved so far, so the trip spends its own money and investing never pauses. Inside: while a big loan is outstanding your offset already is the holiday fund, so the money stays invested and the trip is made good out of the months after it — a bit better off, but you'll see months with nothing invested."
+        >
+          <select
+            value={h.assumptions.holidayFundOnTop ? "top" : "inside"}
+            onChange={(e) =>
+              setA({ holidayFundOnTop: e.target.value === "top" })
+            }
+          >
+            <option value="top">On top of the offset</option>
+            <option value="inside">Inside the offset</option>
+          </select>
+        </Field>
+        <Field
+          label="Minimum cash to keep"
+          tip="Cash you always want on hand for sudden things. It stays in the offset — still cutting your loan interest — but the plan won't invest it. Sits on top of the restricted offset (which isn't yours at all) and on top of whatever is currently saved toward the next holiday, so a holiday doesn't eat into it."
+        >
+          <NumInput
+            value={h.assumptions.minimumCash}
+            onChange={(n) => setA({ minimumCash: n })}
+          />
+        </Field>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={h.assumptions.pooledIncome !== false}
+            onChange={(e) => setA({ pooledIncome: e.target.checked })}
+          />
+          <Tip text="On: spouse's after-tax pay counts toward the shared budget above (loan repayments, living expenses, the offset contribution). Off: only your own pay does — for households pooling this lump but not day-to-day income.">
+            Spouse's pay counts toward the shared budget
           </Tip>
         </label>
       </div>
@@ -630,6 +697,40 @@ function HouseholdForm({
               digits={1}
               onChange={(n) => setIncome({ yieldRate: n / 100 })}
             />
+          </Field>
+          <Field
+            label="Distributions per year"
+            tip="How often the funds actually pay out. Most ETFs are quarterly, so nine months of the year nothing arrives and three months bring a lump. Yield accrues every month either way — this only changes when it lands, which matters for reading a month-by-month plan, not for the horizon numbers."
+          >
+            <select
+              value={h.assumptions.growthAsset.distributionsPerYear}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                setGrowth({ distributionsPerYear: n });
+                setIncome({ distributionsPerYear: n });
+              }}
+            >
+              <option value={12}>Monthly</option>
+              <option value={4}>Quarterly</option>
+              <option value={2}>Half-yearly</option>
+              <option value={1}>Yearly</option>
+            </select>
+          </Field>
+          <Field
+            label="Reinvest distributions"
+            tip="On: distributions buy more of the same fund (a DRP), so nothing lands in your offset and the parcel is dated when it was bought, for CGT. Off: they arrive as cash. Either way the ATO taxes them as income in the year they're paid — a DRP defers no tax, so the July settlement is the same."
+          >
+            <select
+              value={h.assumptions.growthAsset.reinvestDividends ? "drp" : "cash"}
+              onChange={(e) => {
+                const drp = e.target.value === "drp";
+                setGrowth({ reinvestDividends: drp });
+                setIncome({ reinvestDividends: drp });
+              }}
+            >
+              <option value="drp">Reinvest (DRP)</option>
+              <option value="cash">Take as cash</option>
+            </select>
           </Field>
           <Field
             label="Super return % p.a., before 15%"
@@ -946,6 +1047,25 @@ function PersonFields({
         <NumInput
           value={person.age}
           onChange={(n) => onChange({ age: n })}
+        />
+      </Field>
+      <Field
+        label="Novated lease, per fortnight"
+        tip="Pre-tax novated lease deduction — already reflected in taxable income above, same as salary sacrifice. 0 if you don't have one."
+      >
+        <NumInput
+          value={person.novatedLeaseFortnightly}
+          onChange={(n) => onChange({ novatedLeaseFortnightly: n })}
+        />
+      </Field>
+      <Field
+        label="Lease ends on"
+        tip="The lease's end date. Unlike super salary sacrifice, a lease ends — once it does, this amount stops being deducted and taxable income effectively rises back up. A fixed date, so it doesn't need updating every month."
+      >
+        <input
+          type="date"
+          value={person.novatedLeaseEndDate}
+          onChange={(e) => onChange({ novatedLeaseEndDate: e.target.value })}
         />
       </Field>
     </div>
@@ -1337,10 +1457,140 @@ function capWarnings(h: Household): string[] {
   return out;
 }
 
-function yearInvested(months: MonthRow[], year: number): number {
-  return months
-    .filter((m) => m.year === year)
-    .reduce((s, m) => s + m.invested, 0);
+const MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+function monthLabel(dateIso: string): string {
+  return MONTH_NAMES[Number(dateIso.slice(5, 7)) - 1];
+}
+
+/** Real calendar years covered by the run, each with its months in date
+ * order — not the engine's 12-months-from-start "year" blocks, which don't
+ * line up with the wall calendar when the plan starts mid-year. */
+function groupByCalendarYear(months: MonthRow[]): [number, MonthRow[]][] {
+  const groups = new Map<number, MonthRow[]>();
+  for (const m of months) {
+    const y = Number(m.date.slice(0, 4));
+    const arr = groups.get(y);
+    if (arr) arr.push(m);
+    else groups.set(y, [m]);
+  }
+  return Array.from(groups.entries()).sort((a, b) => a[0] - b[0]);
+}
+
+/**
+ * The month's money, end to end: what landed in the cash pool, what it
+ * settled into the offset as, and what the offset then held back versus put
+ * to work. Answers "where did this number come from" without another column.
+ */
+function FlowPopover({
+  month,
+  household,
+  at,
+  onClose,
+}: {
+  month: MonthRow;
+  household: Household;
+  at: { top: number; left: number };
+  onClose: () => void;
+}) {
+  const a = household.assumptions;
+  const restricted = household.loan.restrictedOffset ?? 0;
+  const label = `${MONTH_NAMES[Number(month.date.slice(5, 7)) - 1]} ${month.date.slice(0, 4)}`;
+  const refundToOffset = a.refundsToOffset && month.taxSettlement !== 0;
+  const poolIn =
+    month.spareCash + month.dividendCash + (refundToOffset ? 0 : month.taxSettlement);
+  // Whatever the floor didn't let through stays put; the rest was invested.
+  const working = Math.max(
+    0,
+    month.offset - restricted - a.minimumCash - month.holidayReserved,
+  );
+
+  const Row = ({
+    label: l,
+    value,
+    cls,
+  }: {
+    label: string;
+    value: number | string;
+    cls?: string;
+  }) => (
+    <div className={cls ? `flow-row ${cls}` : "flow-row"}>
+      <span>{l}</span>
+      <span>{typeof value === "number" ? money(value) : value}</span>
+    </div>
+  );
+
+  return createPortal(
+    <>
+      <div className="flow-backdrop" onClick={onClose} />
+      <div className="flow-pop" style={{ top: at.top, left: at.left }} role="dialog">
+        <h4>{label}</h4>
+        <p className="flow-sub">Where this month&rsquo;s money went.</p>
+
+        <h5>Cash pool</h5>
+        <Row label="After-tax pay" value={month.afterTaxPay} />
+        <Row label="Home loan payment" value={-month.homeLoanPayment} />
+        {month.investmentInterest > 0.5 ? (
+          <Row label="Investment loan interest" value={-month.investmentInterest} />
+        ) : null}
+        <Row label="Living expenses" value={-a.monthlyExpenses} />
+        {month.holidaySpend > 0.5 ? (
+          <Row label="Holiday" value={-month.holidaySpend} />
+        ) : (
+          <Row label="Holiday" value="—" cls="flow-muted" />
+        )}
+        {month.dividendCash > 0.5 ? (
+          <Row label="Dividends paid out" value={month.dividendCash} />
+        ) : null}
+        {month.taxSettlement !== 0 && !refundToOffset ? (
+          <Row label="Tax settled (EOFY)" value={month.taxSettlement} />
+        ) : null}
+        <Row label="Settles into offset" value={poolIn} cls="flow-total" />
+
+        <h5>Offset</h5>
+        <Row label="Opening" value={month.offsetOpening} />
+        <Row label="From cash pool" value={poolIn} />
+        {refundToOffset ? (
+          <Row label="Tax refund (EOFY)" value={month.taxSettlement} />
+        ) : null}
+        <Row
+          label={
+            month.investedFromOffset > 0.5
+              ? "Swept into investments"
+              : "Nothing spare to invest"
+          }
+          value={
+            month.investedFromOffset > 0.5 ? -month.investedFromOffset : "—"
+          }
+          cls={month.investedFromOffset > 0.5 ? undefined : "flow-muted"}
+        />
+        <Row label="Closing" value={month.offset} cls="flow-total" />
+        {month.invested - month.investedFromOffset > 0.5 ? (
+          <p className="flow-sub" style={{ marginTop: "0.4rem" }}>
+            A further {money(month.invested - month.investedFromOffset)} was
+            invested straight from the lump, which never passed through the
+            offset.
+          </p>
+        ) : null}
+
+        <h5>What the offset holds</h5>
+        {restricted > 0.5 ? (
+          <Row label="Restricted — not yours" value={restricted} cls="flow-part" />
+        ) : null}
+        <Row label="Emergency fund" value={a.minimumCash} cls="flow-part" />
+        <Row label="Saved toward the holiday" value={month.holidayReserved} cls="flow-part" />
+        <Row label="Working against the loan" value={working} cls="flow-part" />
+
+        <button type="button" className="flow-close" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </>,
+    document.body,
+  );
 }
 
 function HowToDoIt({
@@ -1355,6 +1605,21 @@ function HowToDoIt({
   const invRate = household.assumptions.investmentLoanRate ?? household.loan.annualRate;
   const monthlyInvInterest = (selected.investmentLoan * invRate) / 12;
   const [openYear, setOpenYear] = useState<number | null>(null);
+  const [flow, setFlow] = useState<
+    { month: MonthRow; at: { top: number; left: number } } | null
+  >(null);
+
+  const openFlow = (month: MonthRow, el: Element) => {
+    const r = el.getBoundingClientRect();
+    const width = Math.min(368, window.innerWidth - 24);
+    setFlow({
+      month,
+      at: {
+        top: Math.max(12, Math.min(r.bottom + 6, window.innerHeight - 380)),
+        left: Math.max(12, Math.min(r.left, window.innerWidth - width - 12)),
+      },
+    });
+  };
 
   return (
     <details className="assumptions plan">
@@ -1414,61 +1679,92 @@ function HowToDoIt({
       ) : null}
 
       <h4>Year by year</h4>
-      <p className="plan-tip">Click a year to break it down by month.</p>
+      <p className="plan-tip">
+        Click a year to break it down by month, then click any month to see
+        where its money went.{" "}
+        <Tip text="Money newly moved into shares — the initial lump or redraw, plus whatever the idle-offset sweep reallocates as your home loan shrinks and the offset would otherwise sit above parity. That reallocated part is savings already in your offset from earlier months, not this month's pay, so it is not bounded by 'Spare cash'.">
+          "Invested" can include money swept from savings already in your
+          offset, not just new pay.
+        </Tip>
+      </p>
+      <p className="plan-tip">
+        <Tip text="Pay — your income alone, or combined with your spouse's, per the 'Spouse's pay counts toward the shared budget' setting above — minus the home-loan payment (principal and interest), the investment-loan interest, your living expenses, and the holiday fund in the month it lands. Standard PAYG withholding; accounts for a novated lease ending partway through, if you've set one. Does not include the tax refund the investment-loan deduction earns you; that lands as one lump sum at tax time (around July), not smoothed into each month. It can go negative in a month a big holiday outruns your pay — the offset covers the difference.">
+          "Spare cash" is pay in, every cost out, for that period alone.
+        </Tip>{" "}
+        <Tip text="Your pay and dividends land in a cash pool, every cost comes out of it, and whatever is left empties into the offset that same month — so the pool never carries a balance worth showing. The offset is the household's everyday account, which is why a holiday bigger than one month's pay simply draws it down. Remember the restricted amount inside the offset is not yours to spend.">
+          The offset column is your spendable balance — less the restricted
+          amount, which is not yours.
+        </Tip>
+      </p>
       <div className="plan-table-wrap">
         <table className="plan-table">
           <thead>
             <tr>
               <th>Year</th>
               <th>Invested</th>
+              <th>Spare cash</th>
               <th>Home loan</th>
-              <th>Investment loan</th>
               <th>Offset</th>
+              <th>Investment loan</th>
               <th>Super</th>
               <th>Shares outside super</th>
               <th>Net wealth</th>
             </tr>
           </thead>
           <tbody>
-            {selected.years.map((y) => {
-              const monthsForYear = selected.months.filter(
-                (m) => m.year === y.year,
-              );
-              const isOpen = openYear === y.year && monthsForYear.length > 0;
+            {(() => {
+              const year0 = selected.years.find((y) => y.year === 0);
+              return year0 ? (
+                <tr>
+                  <td>Now</td>
+                  <td>—</td>
+                  <td>—</td>
+                  <td>{money(year0.homeLoan)}</td>
+                  <td>{money(year0.offset)}</td>
+                  <td>{money(year0.investmentLoan)}</td>
+                  <td>{money(year0.superTotal)}</td>
+                  <td>{money(year0.taxableTotal)}</td>
+                  <td>{money(year0.netWealth)}</td>
+                </tr>
+              ) : null;
+            })()}
+            {groupByCalendarYear(selected.months).map(([cy, ms]) => {
+              const isOpen = openYear === cy;
+              const last = ms[ms.length - 1];
+              const invested = ms.reduce((s, m) => s + m.invested, 0);
+              const spareCash = ms.reduce((s, m) => s + m.spareCash, 0);
               return (
-                <Fragment key={y.year}>
+                <Fragment key={cy}>
                   <tr
-                    className={monthsForYear.length ? "plan-year-row" : ""}
-                    onClick={
-                      monthsForYear.length
-                        ? () => setOpenYear(isOpen ? null : y.year)
-                        : undefined
-                    }
+                    className="plan-year-row"
+                    onClick={() => setOpenYear(isOpen ? null : cy)}
                   >
                     <td>
-                      {monthsForYear.length ? (isOpen ? "▾ " : "▸ ") : ""}
-                      {y.year === 0 ? "Now" : y.year}
+                      {isOpen ? "▾ " : "▸ "}
+                      {cy}
                     </td>
-                    <td>
-                      {y.year === 0
-                        ? "—"
-                        : money(yearInvested(selected.months, y.year))}
-                    </td>
-                    <td>{money(y.homeLoan)}</td>
-                    <td>{money(y.investmentLoan)}</td>
-                    <td>{money(y.offset)}</td>
-                    <td>{money(y.superTotal)}</td>
-                    <td>{money(y.taxableTotal)}</td>
-                    <td>{money(y.netWealth)}</td>
+                    <td>{money(invested)}</td>
+                    <td>{money(spareCash)}</td>
+                    <td>{money(last.homeLoan)}</td>
+                    <td>{money(last.offset)}</td>
+                    <td>{money(last.investmentLoan)}</td>
+                    <td>{money(last.superTotal)}</td>
+                    <td>{money(last.taxableTotal)}</td>
+                    <td>{money(last.netWealth)}</td>
                   </tr>
                   {isOpen
-                    ? monthsForYear.map((mo) => (
-                        <tr key={mo.month} className="plan-month-row">
-                          <td>Month {((mo.month - 1) % 12) + 1}</td>
+                    ? ms.map((mo) => (
+                        <tr
+                          key={mo.month}
+                          className="plan-month-row"
+                          onClick={(e) => openFlow(mo, e.currentTarget)}
+                        >
+                          <td>{monthLabel(mo.date)}</td>
                           <td>{money(mo.invested)}</td>
+                          <td>{money(mo.spareCash)}</td>
                           <td>{money(mo.homeLoan)}</td>
-                          <td>{money(mo.investmentLoan)}</td>
                           <td>{money(mo.offset)}</td>
+                          <td>{money(mo.investmentLoan)}</td>
                           <td>{money(mo.superTotal)}</td>
                           <td>{money(mo.taxableTotal)}</td>
                           <td>{money(mo.netWealth)}</td>
@@ -1481,6 +1777,14 @@ function HowToDoIt({
           </tbody>
         </table>
       </div>
+      {flow ? (
+        <FlowPopover
+          month={flow.month}
+          household={household}
+          at={flow.at}
+          onClose={() => setFlow(null)}
+        />
+      ) : null}
     </details>
   );
 }

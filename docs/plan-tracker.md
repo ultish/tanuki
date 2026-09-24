@@ -66,7 +66,7 @@ so a month's inputs are applied in a fixed order:
 A typed super balance corrects the fund return only. Cap room, Division 293
 and contributions tax come from a concessional contribution **flow**
 (`super_cc_you`), which is taxed like the lump's: refund at the marginal
-rate, plus any extra Division 293 it adds on top of the FY's.
+rate, plus any extra Division 293 it adds on top of the year's.
 
 ### What is tracked
 
@@ -119,7 +119,9 @@ interest deduction traceable, so the portfolio split is worth having anyway.
   The investment loan follows unless it has its own rate.
 - `Person.payEvents`: *my taxable income is X from Y*, optionally with a new
   salary (else SG scales by the same ratio). An event resets the base;
-  `incomeGrowthRate` keeps compounding from it each 1 July.
+  `incomeGrowthRate` keeps compounding from it on plan-year anniversaries.
+  Pay lands in the month it changes; that year's tax base is the average of
+  its twelve months.
 
 Events are facts, so every tracker's re-forecast uses the household's
 current events. Everything else in a tracker's frozen household stays as
@@ -127,17 +129,34 @@ accepted. The chart's third line, **the plan at today's rates**, is the
 original plan re-run with the recorded events and nothing logged: the gap to
 the plan is the world moving, the gap to the re-forecast is what you did.
 
-### Engine behaviour changes (every scenario, not only trackers)
+### The engine is main's; the tracker only adds opt-in hooks
 
-- **Tax years are financial years.** Tax on investment income accrues per
-  July–June FY, not per plan year. A plan starting in September now has a
-  ten-month first FY. The ranking test still passes; two tests were
-  realigned (one now starts on 1 July, one asserts July-anchored growth).
-- **Income is monthly.** `incomeSchedule` gives the rate in force each month;
-  an FY's tax base is the sum of its twelve months, including months before
-  the plan starts.
-- **Division 293 on ongoing contributions accrues monthly**, a twelfth of the
-  FY's amount each month, so a run bears exactly the months it covers.
+The projection engine is the verified one from `main` (cash pool, plan-year
+tax with the July settlement, holiday fund, minimum cash, distribution
+schedule, loan re-amortised after a split). The tracker adds hooks to it
+without changing what it computes for an ordinary scenario:
+
+- `RunOptions.opening` — start from a position instead of a standing start.
+- `RunOptions.actuals` — replay the log: month one's flows override the
+  placement, later months' flows move money out of the offset, balances win
+  at month end.
+- `RunOptions.midStream` — the run stops partway (building an opening), so
+  the last month doesn't flush unsettled tax or undistributed yield; the
+  closing position carries them.
+- `Person.payEvents` and `Loan.rateEvents` — only people and loans that have
+  events take the event-aware path; growth stays on plan-year anniversaries.
+
+With none of these in play the output is identical to `main`'s engine:
+checked field by field across every preset and stack (361 scenarios, seven
+households covering pay and SG, holidays, a cash buffer, a novated lease,
+interest-only with restricted offset, and monthly distributions), and
+main's own 52 tests pass unchanged.
+
+Known approximations when a new plan starts from an opening position: it
+starts a fresh plan year (income growth and the yearly tax base count from
+its own start), and its first year charges only the Division 293 / excess
+tax its own lump adds — the ongoing contributions' charge for the year in
+progress was made by the run that got there.
 
 ## Data model
 
@@ -146,6 +165,8 @@ See `types.ts` (`ActualMonth`, `OpeningPosition`, `RisuLot`, `RisuTrade`,
 
 - The tracker's start is the first of its month and overwrites
   `baseline.household.assumptions.startDate`; `horizonYears` is kept.
+- Rows carry main's `date` (the ISO first day of the month they cover); the
+  log and the tracker view key months as `yyyy-mm`.
 - Stack ids are generated, so `scenarioLabel` is display only; the frozen
   allocation (after caps) and frozen months are the plan.
 - A re-plan stores its **immutable** `opening` and the root `planSince`, and
@@ -153,10 +174,10 @@ See `types.ts` (`ActualMonth`, `OpeningPosition`, `RisuLot`, `RisuTrade`,
 
 `simulate(household, def, { opening, actuals, planSince })` returns the
 result and a `closing` position that can seed the next run. An opening
-carries the FY in progress (tax running totals, one-off concessional
-contributions for cap room), the P&I payment in force and the remaining
-term, so carrying on from a closing position gives the same answer as one
-continuous run (tested).
+carries unsettled tax, undistributed yield, one-off concessional
+contributions for cap room, the P&I payment in force and the remaining
+term. Split on a plan-year boundary, carrying on from a closing position
+gives the same month rows as one continuous run (tested).
 
 ## API
 
@@ -195,7 +216,8 @@ it at risu's Tailscale address.
 
 1. Pay events live on the household only.
 2. A re-plan asks how much to deploy every time, pre-filled with the offset
-   above the restricted floor. Zero offers "Carry on from here".
+   above what has to stay liquid (restricted offset, minimum cash, holiday
+   savings so far). Zero offers "Carry on from here".
 3. Shares are tracked per person and per sleeve.
 4. Tanuki reaches risu over HTTP only.
 5. A sell is a negative flow: the month's figure is net dollars invested.

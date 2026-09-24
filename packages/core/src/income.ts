@@ -1,93 +1,70 @@
-import { addMonthsIso } from "./tax.js";
+import { monthsBetweenIso } from "./tax.js";
 import type { Person } from "./types.js";
 
-/** Australian financial year a date falls in, named by its starting year: 2026-09-01 → 2026. */
-export function fyOf(iso: string): number {
-  const y = Number(iso.slice(0, 4));
-  const m = Number(iso.slice(5, 7));
-  return m >= 7 ? y : y - 1;
-}
-
-/** Annual rates in force on a given date. */
-export type IncomeRates = {
-  taxableIncome: number;
-  /** Employer SG. */
-  sg: number;
-  /** Salary sacrifice / personal deductible, the household's planned amount. */
-  sacrifice: number;
-};
-
-export type IncomeSchedule = {
-  at: (iso: string) => IncomeRates;
-  /** Sums over the twelve months of a financial year. */
-  fy: (fy: number) => { taxableIncome: number; work: number };
-};
-
 /**
- * Income as a function of the month. `incomeGrowthRate` compounds each
- * 1 July — counted from the plan start for the household figure, and from
- * the event date for a recorded pay event. Months of the first FY before the
- * plan starts use the household figure, so an FY sum is a full year.
+ * Taxable income and employer SG in force in a given plan month, once real
+ * pay events are recorded. Growth follows the engine's own convention —
+ * `incomeGrowthRate` steps on each plan-year anniversary — counted from the
+ * plan start for the household's figure, and from the event's plan year for
+ * a recorded rise. Returns null for a person with no events, so the engine
+ * keeps its own yearly figures untouched.
  */
-export function incomeSchedule(
+export type PaySchedule = {
+  /** Annual taxable income in force in plan month `m` (0-based). */
+  taxableAt: (m: number) => number;
+  /** Annual employer SG in force in plan month `m`. */
+  sgAt: (m: number) => number;
+};
+
+export function paySchedule(
   person: Person,
   planStart: string,
   growth: number,
-): IncomeSchedule {
-  const grow = (from: string, to: string) =>
-    Math.pow(1 + growth, Math.max(0, fyOf(to) - fyOf(from)));
+): PaySchedule | null {
+  const events = [...(person.payEvents ?? [])].sort((x, y) => x.from.localeCompare(y.from));
+  if (!events.length) return null;
 
-  type Anchor = { from: string; taxableIncome: number; sg: number };
-  const base: Anchor = {
-    from: planStart,
-    taxableIncome: person.taxableIncome,
-    sg: Math.max(0, person.employerSgThisFy),
-  };
-  const anchors: Anchor[] = [];
-  let prev = base;
-  const events = [...(person.payEvents ?? [])].sort((a, b) =>
-    a.from.localeCompare(b.from),
-  );
+  const year = (m: number) => Math.floor(Math.max(0, m) / 12);
+  const grow = (fromMonth: number, m: number) =>
+    Math.pow(1 + growth, Math.max(0, year(m) - year(fromMonth)));
+
+  type Anchor = { month: number; taxableIncome: number; sg: number };
+  const anchors: Anchor[] = [
+    {
+      month: 0,
+      taxableIncome: person.taxableIncome,
+      sg: Math.max(0, person.employerSgThisFy),
+    },
+  ];
   for (const e of events) {
-    const incomeBefore = prev.taxableIncome * grow(prev.from, e.from);
-    const sgBefore = prev.sg * grow(prev.from, e.from);
+    const month = monthsBetweenIso(planStart, e.from);
+    const prev = anchors[anchors.length - 1]!;
+    const incomeBefore = prev.taxableIncome * grow(prev.month, month);
+    const sgBefore = prev.sg * grow(prev.month, month);
     const sg =
       e.salary != null
         ? Math.max(0, e.salary) * (person.sgRatePercent / 100)
         : incomeBefore > 0
           ? sgBefore * (e.taxableIncome / incomeBefore)
           : sgBefore;
-    prev = { from: e.from, taxableIncome: e.taxableIncome, sg };
-    anchors.push(prev);
+    // An event dated before the plan starts is simply the pay at the start.
+    anchors.push({ month: Math.max(0, month), taxableIncome: e.taxableIncome, sg });
   }
 
-  const at = (iso: string): IncomeRates => {
-    let a = base;
-    for (const x of anchors) if (x.from <= iso) a = x;
-    const g = grow(a.from, iso);
-    return {
-      taxableIncome: a.taxableIncome * g,
-      sg: a.sg * g,
-      sacrifice:
-        Math.max(0, person.extraConcessionalThisFy) * grow(planStart, iso),
-    };
+  const anchorAt = (m: number): Anchor => {
+    let a = anchors[0]!;
+    for (const x of anchors) if (x.month <= m) a = x;
+    return a;
   };
 
-  const cache = new Map<number, { taxableIncome: number; work: number }>();
-  const fy = (year: number) => {
-    const hit = cache.get(year);
-    if (hit) return hit;
-    let taxableIncome = 0;
-    let work = 0;
-    for (let i = 0; i < 12; i++) {
-      const r = at(addMonthsIso(`${year}-07-01`, i));
-      taxableIncome += r.taxableIncome / 12;
-      work += (r.sg + r.sacrifice) / 12;
-    }
-    const out = { taxableIncome, work };
-    cache.set(year, out);
-    return out;
+  return {
+    taxableAt: (m) => {
+      const a = anchorAt(m);
+      return a.taxableIncome * grow(a.month, m);
+    },
+    sgAt: (m) => {
+      const a = anchorAt(m);
+      return a.sg * grow(a.month, m);
+    },
   };
-
-  return { at, fy };
 }

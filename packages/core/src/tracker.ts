@@ -228,7 +228,8 @@ export function viewTracker(
   const todaysRates = simulate(recorded, def, { opening: t.opening }).result;
 
   const first = monthKey(t.startDate);
-  const last = t.baseline.months.at(-1)?.date ?? first;
+  const lastRow = t.baseline.months.at(-1);
+  const last = lastRow ? monthKey(lastRow.date) : first;
   let lastLogged: string | null = null;
   for (const a of log) {
     if (a.date >= first && a.date <= last && (!lastLogged || a.date > lastLogged)) {
@@ -246,11 +247,11 @@ export function viewTracker(
       horizonYears: baseline.household.assumptions.horizonYears,
     },
     months: t.baseline.months.map((plan, i) => ({
-      date: plan.date,
+      date: monthKey(plan.date),
       plan,
       reforecast: reforecast.months[i]!,
       todaysRates: todaysRates.months[i]!,
-      actual: actuals.get(plan.date),
+      actual: actuals.get(monthKey(plan.date)),
     })),
     lastLogged,
     end: {
@@ -285,12 +286,23 @@ export function openingAt(
     opening: t.opening,
     actuals: logMap(log),
     planSince: t.planSince,
+    midStream: true,
   }).closing;
 }
 
-/** Offset you could still move: everything above the restricted floor. */
+/**
+ * Offset you could still move: everything above what has to stay liquid —
+ * money that isn't yours, the minimum cash buffer, and what's saved so far
+ * toward the next holiday (the same floor the idle sweep respects).
+ */
 export function deployable(opening: OpeningPosition, h: Household): number {
-  return Math.max(0, opening.offset - Math.max(0, h.loan.restrictedOffset ?? 0));
+  const a = h.assumptions;
+  const holidayMonth = Math.min(12, Math.max(1, Math.round(a.holidayMonth)));
+  const monthsSaving = (Number(opening.date.slice(5, 7)) - holidayMonth + 12) % 12;
+  const holidayReserve = a.annualHolidaySpend > 0 ? a.annualHolidaySpend * (monthsSaving / 12) : 0;
+  const floor =
+    Math.max(0, h.loan.restrictedOffset ?? 0) + Math.max(0, a.minimumCash) + holidayReserve;
+  return Math.max(0, opening.offset - floor);
 }
 
 /**
@@ -305,7 +317,7 @@ function replanSetup(
   const room = deployable(opening, current);
   if (!(deploy >= 0) || deploy > room + 0.5) {
     throw new Error(
-      `Can only deploy up to $${Math.round(room).toLocaleString("en-AU")}, the offset above the restricted floor.`,
+      `Can only deploy up to $${Math.round(room).toLocaleString("en-AU")}, the offset above what has to stay liquid.`,
     );
   }
   return {

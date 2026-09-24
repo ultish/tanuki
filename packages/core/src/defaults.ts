@@ -1,5 +1,5 @@
 import { FY_2026_27 } from "./caps.js";
-import { round2 } from "./tax.js";
+import { monthsBetweenIso, round2 } from "./tax.js";
 import type { Assumptions, Household, PayEvent, Person, RateEvent } from "./types.js";
 
 /** Legislated Super Guarantee rate default, FY2026-27. */
@@ -13,6 +13,36 @@ export function annualSg(salary: number, sgRatePercent: number): number {
 /** `fortnightly * 26` — the formula behind `Person.extraConcessionalThisFy`. */
 export function annualFromFortnightly(fortnightly: number): number {
   return round2(fortnightly * 26);
+}
+
+/**
+ * A novated lease is a pre-tax deduction with an end date, unlike super
+ * salary sacrifice — `taxableIncome` already nets it out while it's
+ * active, but once `novatedLeaseEndDate` passes, that fixed amount (it
+ * doesn't grow — it's a fixed lease payment) reverts to taxable, prorated
+ * for the plan-year it happens in. `startDate` is the plan's own start
+ * (`Assumptions.startDate`) — "months remaining" is always measured from
+ * there, not stored, so the end date never needs updating as time passes.
+ * `yearIndex` is 0-based (0 = the plan's first year). A person with no
+ * lease configured (`novatedLeaseFortnightly` is 0, the default) is
+ * always unaffected.
+ */
+export function leaseAddback(
+  person: Pick<Person, "novatedLeaseFortnightly" | "novatedLeaseEndDate">,
+  startDate: string,
+  yearIndex: number,
+): number {
+  if (person.novatedLeaseFortnightly <= 0 || !person.novatedLeaseEndDate) {
+    return 0;
+  }
+  const monthsRemaining = monthsBetweenIso(startDate, person.novatedLeaseEndDate);
+  const yearStartMonth = yearIndex * 12;
+  const monthsActiveThisYear = Math.max(
+    0,
+    Math.min(12, monthsRemaining - yearStartMonth),
+  );
+  const annualLease = person.novatedLeaseFortnightly * 26;
+  return round2(annualLease * (1 - monthsActiveThisYear / 12));
 }
 
 export function defaultPerson(id: Person["id"], overrides: Partial<Person> = {}): Person {
@@ -31,6 +61,8 @@ export function defaultPerson(id: Person["id"], overrides: Partial<Person> = {})
       extraConcessionalThisFy: 0,
       unusedConcessionalCarryForward: 0,
       age: 38,
+      novatedLeaseFortnightly: 0,
+      novatedLeaseEndDate: "",
       ...overrides,
     };
   }
@@ -48,16 +80,20 @@ export function defaultPerson(id: Person["id"], overrides: Partial<Person> = {})
     extraConcessionalThisFy: 0,
     unusedConcessionalCarryForward: 0,
     age: 36,
+    novatedLeaseFortnightly: 0,
+    novatedLeaseEndDate: "",
     ...overrides,
   };
 }
 
 export function defaultAssumptions(overrides: Partial<Assumptions> = {}): Assumptions {
-  const today = new Date();
-  const iso = today.toISOString().slice(0, 10);
+  // Start at a calendar-year boundary so every annual step — income growth,
+  // the holiday fund, the plan-year rows — lands on 1 January instead of on
+  // the anniversary of whatever day the household was first set up.
+  const nextNewYear = `${new Date().getUTCFullYear() + 1}-01-01`;
   return {
     horizonYears: 10,
-    startDate: iso,
+    startDate: nextNewYear,
     inflationRate: 0.025,
     incomeGrowthRate: 0,
     growthAsset: {
@@ -67,6 +103,7 @@ export function defaultAssumptions(overrides: Partial<Assumptions> = {}): Assump
       mer: 0.0016,
       frankingPercent: 20,
       reinvestDividends: true,
+      distributionsPerYear: 4,
     },
     incomeAsset: {
       label: "Income (high-yield AU)",
@@ -75,6 +112,7 @@ export function defaultAssumptions(overrides: Partial<Assumptions> = {}): Assump
       mer: 0.0025,
       frankingPercent: 80,
       reinvestDividends: false,
+      distributionsPerYear: 4,
     },
     superReturnRate: 0.075,
     superEarningsTax: 0.15,
@@ -90,6 +128,12 @@ export function defaultAssumptions(overrides: Partial<Assumptions> = {}): Assump
     refundsToOffset: true,
     useNccBringForward: true,
     sweepIdleOffset: true,
+    minimumCash: 0,
+    monthlyExpenses: 0,
+    annualHolidaySpend: 0,
+    holidayMonth: 1,
+    holidayFundOnTop: true,
+    pooledIncome: true,
     ...overrides,
   };
 }

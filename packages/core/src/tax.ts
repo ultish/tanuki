@@ -88,6 +88,14 @@ export function daysBetweenIso(from: string, to: string): number {
   return Math.floor((b - a) / (1000 * 60 * 60 * 24));
 }
 
+/** Whole calendar months between two ISO dates (year/month only, day ignored). */
+export function monthsBetweenIso(from: string, to: string): number {
+  const [fy, fm] = from.split("-").map(Number);
+  const [ty, tm] = to.split("-").map(Number);
+  if (!fy || !fm || !ty || !tm) return 0;
+  return (ty - fy) * 12 + (tm - fm);
+}
+
 /**
  * Add calendar months, clamping the day to the end of a shorter target
  * month (e.g. Jan 31 + 1 month = Feb 28, not a rollover into March).
