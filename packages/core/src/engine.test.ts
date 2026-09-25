@@ -136,7 +136,10 @@ describe("concessional vs offset at 0% markets", () => {
   });
 
   it("your CC beats spouse CC because 47% > 32%", () => {
-    const h = hush();
+    const h = hush({
+      you: defaultPerson("you", { taxableIncome: 200_000, marginalRate: 0.45 }),
+      spouse: defaultPerson("spouse", { taxableIncome: 80_000, marginalRate: 0.3 }),
+    });
     const cap = Math.min(
       concessionalRoom(h.you, h.assumptions),
       concessionalRoom(h.spouse, h.assumptions),
@@ -175,6 +178,7 @@ describe("concessional vs offset at 0% markets", () => {
 describe("day-one identity (0% rates)", () => {
   it("debt recycle pays the home down then redraws, it does not stuff the offset", () => {
     const h = hush({
+      lumpSum: 250_000,
       loan: {
         balance: 400_000,
         offset: 80_000,
@@ -243,6 +247,8 @@ describe("day-one identity (0% rates)", () => {
 describe("debt recycle deduction", () => {
   it("costs the after-tax interest rate when the loan rate is positive and assets are flat", () => {
     const h = hush({
+      lumpSum: 200_000,
+      you: defaultPerson("you", { taxableIncome: 200_000, marginalRate: 0.45 }),
       loan: {
         balance: 650_000,
         offset: 80_000,
@@ -260,7 +266,7 @@ describe("debt recycle deduction", () => {
       h,
       def("r", { debt_recycle_you_growth: h.lumpSum }),
     );
-    // Recycling locks a quarter-million of debt outside the offset: the
+    // Recycling locks that debt outside the offset: the
     // split can't be offset the way the home loan can, so once cash piles
     // up the un-recycled household gets to kill all its interest and the
     // recycled one is still paying 6% on the split. The deduction softens
@@ -397,6 +403,8 @@ describe("taxable name split", () => {
       inflationRate: 0,
     });
     const h = defaultHousehold({
+      you: defaultPerson("you", { taxableIncome: 200_000, marginalRate: 0.45 }),
+      spouse: defaultPerson("spouse", { taxableIncome: 80_000, marginalRate: 0.3 }),
       assumptions: a,
       loan: {
         balance: 0,
@@ -700,7 +708,7 @@ describe("restricted offset (not yours)", () => {
     const r = runScenario(h, def("o", { offset: h.lumpSum }));
     // floor = max(homeLoan 50k, restricted 100k) = 100k — the loan is
     // already more than covered, so the restriction is what's protected.
-    // idle = offset(180k+250k) - 100k = 330k swept, on day one.
+    // Idle cash above the floor is swept on day one.
     const day0 = r.years[0]!;
     expect(day0.offset).toBeCloseTo(100_000, 0);
     expect(day0.taxableTotal).toBeCloseTo(180_000 + h.lumpSum - 100_000, 0);
@@ -767,8 +775,8 @@ describe("income tax brackets", () => {
 
 describe("Div 293", () => {
   it("charges 15% on concessional once income + CC exceeds 250k", () => {
-    expect(division293Tax(220_000, 32_500, 250_000)).toBeCloseTo(
-      (220_000 + 32_500 - 250_000) * 0.15,
+    expect(division293Tax(240_000, 32_500, 250_000)).toBeCloseTo(
+      (240_000 + 32_500 - 250_000) * 0.15,
       5,
     );
     expect(division293Tax(180_000, 32_500, 250_000)).toBe(0);

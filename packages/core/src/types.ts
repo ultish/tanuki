@@ -97,7 +97,7 @@ export type Loan = {
   balance: number;
   /** Offset balance (reduces interest-bearing principal) */
   offset: number;
-  /** Home loan rate as decimal, e.g. 0.058 */
+  /** Home loan rate as decimal, e.g. 0.06 */
   annualRate: number;
   remainingYears: number;
   /** If set, used as the P&I (or IO) payment; else computed from balance/term */

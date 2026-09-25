@@ -138,6 +138,7 @@ describe("AUDIT: addMonthsIso month-end handling", () => {
 describe("AUDIT: debt recycle beyond the home loan balance", () => {
   it("warns when the recycled amount exceeds the available home loan balance", () => {
     const h = hush({
+      lumpSum: 200_000,
       loan: {
         balance: 100_000,
         offset: 20_000,
@@ -146,7 +147,7 @@ describe("AUDIT: debt recycle beyond the home loan balance", () => {
         interestOnly: true,
       },
     });
-    // lumpSum (250k default) is far more than the 100k home loan balance.
+    // The lump is larger than the home loan balance.
     const r = runScenario(h, def("r", { debt_recycle_you_growth: h.lumpSum }));
     expect(
       r.warnings.some((w) => /recycle/i.test(w) || /loan balance/i.test(w)),
@@ -156,8 +157,8 @@ describe("AUDIT: debt recycle beyond the home loan balance", () => {
 
 describe("AUDIT: allocation input validation", () => {
   it("does not let a negative bucket amount slip through applyCaps unflagged", () => {
-    const h = hush(); // lumpSum 250,000
-    // Sums to 200,000 — under the lump — only because of the negative leg.
+    const h = hush();
+    // The positive leg is only "under" the lump because of the negative leg.
     const bogus = { offset: -1_000_000, taxable_you_growth: 1_200_000 };
     const { applied } = applyCaps(h, bogus);
     expect(Object.values(applied).some((v) => (v ?? 0) < 0)).toBe(false);

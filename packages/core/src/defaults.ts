@@ -1,5 +1,5 @@
 import { FY_2026_27 } from "./caps.js";
-import { monthsBetweenIso, round2 } from "./tax.js";
+import { lastDollarPit, monthsBetweenIso, round2 } from "./tax.js";
 import type {
   Assumptions,
   Household,
@@ -81,17 +81,17 @@ export function defaultPerson(id: Person["id"], overrides: Partial<Person> = {})
     return {
       id: "you",
       label: "You",
-      marginalRate: 0.45,
+      marginalRate: lastDollarPit(100_000),
       medicareLevy: 0.02,
-      taxableIncome: 220_000,
-      superBalance: 280_000,
+      taxableIncome: 100_000,
+      superBalance: 50_000,
       salary: 0,
       sgRatePercent: DEFAULT_SG_RATE_PERCENT,
       extraConcessionalFortnightly: 0,
       employerSgThisFy: 0,
       extraConcessionalThisFy: 0,
       unusedConcessionalCarryForward: 0,
-      age: 38,
+      age: 30,
       novatedLeaseFortnightly: 0,
       novatedLeaseEndDate: "",
       ...overrides,
@@ -100,17 +100,17 @@ export function defaultPerson(id: Person["id"], overrides: Partial<Person> = {})
   return {
     id: "spouse",
     label: "Spouse",
-    marginalRate: 0.3,
+    marginalRate: lastDollarPit(100_000),
     medicareLevy: 0.02,
-    taxableIncome: 90_000,
-    superBalance: 160_000,
+    taxableIncome: 100_000,
+    superBalance: 50_000,
     salary: 0,
     sgRatePercent: DEFAULT_SG_RATE_PERCENT,
     extraConcessionalFortnightly: 0,
     employerSgThisFy: 0,
     extraConcessionalThisFy: 0,
     unusedConcessionalCarryForward: 0,
-    age: 36,
+    age: 30,
     novatedLeaseFortnightly: 0,
     novatedLeaseEndDate: "",
     ...overrides,
@@ -172,13 +172,13 @@ export function defaultAssumptions(overrides: Partial<Assumptions> = {}): Assump
 
 export function defaultHousehold(overrides: Partial<Household> = {}): Household {
   const base: Household = {
-    lumpSum: 250_000,
+    lumpSum: 100_000,
     you: defaultPerson("you"),
     spouse: defaultPerson("spouse"),
     loan: {
-      balance: 650_000,
-      offset: 80_000,
-      annualRate: 0.058,
+      balance: 500_000,
+      offset: 20_000,
+      annualRate: 0.06,
       remainingYears: 25,
       interestOnly: false,
     },

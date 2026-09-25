@@ -84,7 +84,7 @@ describe("dated pay events", () => {
     });
     const r = simulate(h, def({ offset: 250_000 })).result;
     // Sep–Feb at $1,000/month SG, Mar–Aug at $1,500, less 15% contributions tax.
-    expect(r.superYou).toBeCloseTo(280_000 + 0.85 * (6 * 1_000 + 6 * 1_500), 2);
+    expect(r.superYou).toBeCloseTo(50_000 + 0.85 * (6 * 1_000 + 6 * 1_500), 2);
   });
 
   it("scales SG with taxable income when the event leaves salary out", () => {
@@ -99,7 +99,7 @@ describe("dated pay events", () => {
       assumptions: { horizonYears: 1 },
     });
     const r = simulate(h, def({ offset: 250_000 })).result;
-    expect(r.superYou).toBeCloseTo(280_000 + 0.85 * 15_000, 2);
+    expect(r.superYou).toBeCloseTo(50_000 + 0.85 * 15_000, 2);
   });
 });
 
