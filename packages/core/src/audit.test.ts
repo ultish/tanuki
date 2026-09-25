@@ -2,9 +2,8 @@
  * Engine correctness audit — written TDD-style, ahead of the fixes.
  *
  * Each test encodes what the engine should do financially, independent of
- * what it did at the time. All findings here were fixed the same day — see
- * docs/engine-audit-2026-09.md for the write-up. Kept as a permanent
- * regression suite against the same bugs recurring.
+ * what it did at the time. All findings here were fixed the same day. Kept
+ * as a permanent regression suite against the same bugs recurring.
  */
 import { describe, expect, it } from "vitest";
 import { defaultAssumptions, defaultHousehold, defaultPerson } from "./defaults.js";

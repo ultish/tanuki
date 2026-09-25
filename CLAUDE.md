@@ -46,7 +46,7 @@ Everything financial lives here; the API layer is intentionally thin (AGENTS.md 
 - **`loan.ts`** — `pmt` (repayment calc) and `stepHomeLoan` (one month of amortization against an offset balance).
 - **`defaults.ts`** — `defaultHousehold`/`defaultPerson`/`defaultAssumptions` and `mergeHousehold` (shallow+nested merge used to apply a partial PUT onto the stored household without dropping unset fields).
 - **`income.ts`** — `paySchedule`: taxable income and SG by plan month for a person with `payEvents`; people without events keep the engine's own yearly figures.
-- **`tracker.ts`** / **`risu.ts`** — the plan tracker: frozen targets, the shared monthly log (`ActualMonth`) replayed through `simulate`'s `actuals` option, re-plans from an `OpeningPosition`, and risu parcel mapping. Design and rationale: `docs/plan-tracker.md`.
+- **`tracker.ts`** / **`risu.ts`** — the plan tracker: frozen targets, the shared monthly log (`ActualMonth`) replayed through `simulate`'s `actuals` option, re-plans from an `OpeningPosition`, and risu parcel mapping.
 - **`explainers.ts`** — plain-language copy served to the UI via `/api/meta`, keyed to concepts (offset, debt recycling, etc.), separate from the per-scenario `notes` generated in `engine.ts`'s `scenarioNotes`.
 
 ### `apps/api`
@@ -61,4 +61,4 @@ Single-page React app; the Plans view is in `App.tsx` (household form, scenario 
 
 ### Deployment
 
-`docs/hana-server.md` and `scripts/deploy-hana.sh`/`hana-backup.sh` cover deploying this app to the user's home server (`hana-server`) via Quadlet/Caddy — see the `hana-deploy` skill rather than re-deriving these steps. The `Dockerfile` builds all three workspaces into one image and runs the API (which serves the web build) against a `/data` volume.
+`scripts/deploy-hana.sh` and `scripts/hana-backup.sh` deploy this app to the home server (`hana-server`) via Quadlet/Caddy — see the `hana-deploy` skill rather than re-deriving these steps. The `Dockerfile` builds all three workspaces into one image and runs the API (which serves the web build) against a `/data` volume.

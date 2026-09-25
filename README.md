@@ -37,7 +37,7 @@ Accept a scenario as a plan (**Track this plan**) and Tanuki freezes its project
 - **Re-plan** from any month: choose how much of the offset to put to work and which strategy places it.
 - Shares can come straight from **Risu**: link portfolios (owner, own money or debt-recycled) and map tickers to growth or income, then pull a month's real parcels. Each plan picks which portfolios feed it. Tanuki only reads Risu's HTTP API, at `RISU_URL`.
 
-One log serves every plan. Design and rationale: [`docs/plan-tracker.md`](docs/plan-tracker.md).
+One log serves every plan.
 
 ## What it is careful about
 
