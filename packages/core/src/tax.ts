@@ -143,8 +143,10 @@ export type HybridCgtResult = {
  *
  * - Disposal before cutover: 50% discount if held ≥ 12 months, else full MTR.
  * - Acquisition on/after cutover: CPI-index cost; tax = indexed gain × max(MTR, 30%).
- * - Straddle: pre-cutover gain uses old discount (if 12 months held at cutover);
- *   post-cutover gain uses indexation from the cutover value + 30% floor.
+ * - Straddle: pre-cutover gain uses old discount (if held 12 months by the
+ *   actual sale — s 112-160(3)(c) tests the deemed 30 June 2027 sale as if it
+ *   happened on the day of the real one); post-cutover gain uses indexation
+ *   from the cutover value + 30% floor.
  */
 export function estimateHybridCgt(input: HybridCgtInput): HybridCgtResult {
   const notes: string[] = [];
@@ -215,15 +217,13 @@ export function estimateHybridCgt(input: HybridCgtInput): HybridCgtResult {
       input.disposedDate,
     );
   const preGain = cutoverValue - input.cost;
-  const held12AtCutover =
-    daysBetweenIso(input.acquiredDate, CGT_REGIME_CUTOVER_ISO) >= 365;
-  const preTaxable =
-    preGain <= 0 ? 0 : held12AtCutover ? preGain * 0.5 : preGain;
+  // The 12 months runs from purchase to the actual sale, not to the cutover.
+  const preTaxable = preGain <= 0 ? 0 : longTerm ? preGain * 0.5 : preGain;
   const preTax = preTaxable <= 0 ? 0 : taxDelta(base, preTaxable, med);
   notes.push(
-    held12AtCutover
+    longTerm
       ? "Gain before 1 Jul 2027 keeps the 50% discount."
-      : "Bought less than 12 months before 1 Jul 2027. Gain up to that day is modelled at full marginal rate, no discount.",
+      : "Sold within 12 months of buying. Gain up to 1 Jul 2027 is at full marginal rate, no discount.",
   );
 
   const yearsAfter =

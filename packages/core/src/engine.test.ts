@@ -549,6 +549,36 @@ describe("CGT 2027 hybrid", () => {
     expect(r.taxIfLegacyDiscount).toBeCloseTo(100_000 * 0.5 * 0.47, 0);
   });
 
+  // Tax Reform No. 1 Act 2026, s 112-160(3)(c): whether the pre-1 July 2027
+  // gain is a discount gain is tested as if the deemed sale happened on the
+  // day of the real sale — so the 12 months runs to the sale, not the cutover.
+  it("bought under 12 months before the cutover, sold years later: pre-cutover gain keeps the discount", () => {
+    const r = estimateHybridCgt({
+      proceeds: 150_000,
+      cost: 100_000,
+      acquiredDate: "2026-09-01",
+      disposedDate: "2036-09-01",
+      valueAtCutover: 120_000,
+      inflationRate: 0,
+      person: { taxableIncome: 400_000, medicareLevy: 0.02 },
+    });
+    // $20k before the cutover at half of 47%, $30k after it at 47%.
+    expect(r.tax).toBeCloseTo(20_000 * 0.5 * 0.47 + 30_000 * 0.47, 2);
+  });
+
+  it("sold within 12 months of buying: no discount on the pre-cutover gain", () => {
+    const r = estimateHybridCgt({
+      proceeds: 115_000,
+      cost: 100_000,
+      acquiredDate: "2027-03-01",
+      disposedDate: "2027-12-01",
+      valueAtCutover: 110_000,
+      inflationRate: 0,
+      person: { taxableIncome: 400_000, medicareLevy: 0.02 },
+    });
+    expect(r.tax).toBeCloseTo(10_000 * 0.47 + 5_000 * 0.47, 2);
+  });
+
   it("does not give a late-bought parcel a decade of CPI indexation", () => {
     const person = { taxableIncome: 400_000, medicareLevy: 0.02 };
     const gain = {

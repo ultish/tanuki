@@ -9,7 +9,7 @@
 
 1. Domain logic lives in `@tanuki/core`. Keep the API thin.
 2. Caps default to **FY2026–27**. If you bump a FY, update `caps.ts`, tests, README, and UI copy together.
-3. CGT: hybrid around `2027-07-01` (pre-cutover 50% discount if 12 months held; post-cutover indexation + max(MTR, 30%)). Super is not on this regime.
+3. CGT: hybrid around `2027-07-01` (pre-cutover 50% discount if held 12 months by the sale, not by the cutover — s 112-160(3)(c); post-cutover indexation + max(MTR, 30%)). Super is not on this regime.
 4. Debt recycle: lump pays down the home loan, then redraw as an interest-only investment split, assets in the **borrower’s** name (you). Not recycle-from-offset.
 5. Do not “fix” the spouse-super intuition by making contribution splitting look like a 45%→30% tax cut. Explain it; model the real split (taxable in her name, concessional in the high earner’s name).
 6. After material behaviour change: run `pnpm --filter @tanuki/core test`.
