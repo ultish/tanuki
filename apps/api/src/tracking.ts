@@ -2,11 +2,11 @@ import {
   addMonthsIso,
   createReplan,
   createTracker,
-  deployable,
   firstOfMonth,
   mapRisuMonth,
   mergeHousehold,
   openingAt,
+  openingSummary,
   replanPreview,
   risuTickerKey,
   upsertActual,
@@ -273,17 +273,7 @@ export function registerTrackingRoutes(
     if (!MONTH.test(at)) return c.json({ error: "at must be yyyy-mm." }, 400);
     const h = deps.loadHousehold();
     try {
-      const o = openingAt(t, h, loadLog(), at, loadLink());
-      return c.json({
-        date: o.date,
-        offset: o.offset,
-        homeLoan: o.homeLoan,
-        investmentLoan: o.invLoan,
-        superYou: o.superYou,
-        superSpouse: o.superSpouse,
-        shares: o.lots.reduce((s, l) => s + l.value, 0),
-        deployable: deployable(o, h),
-      });
+      return c.json(openingSummary(openingAt(t, h, loadLog(), at, loadLink()), h));
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
     }

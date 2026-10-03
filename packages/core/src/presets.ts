@@ -38,6 +38,14 @@ export function buildPresets(h: Household): ScenarioDef[] {
       allocation: alloc({ offset: S }),
     },
     {
+      id: "savings",
+      label: "Leave it in a savings account",
+      summary:
+        "Leave the whole lump in a bank savings account at the savings rate.\n\nIt earns interest. It does not sit against the home loan, so the mortgage still charges interest on the full balance. Interest is taxed each year in the lower-rate name.\n\nDrawn on the other strategies too, so you can see what they earn over just leaving the money in the bank.",
+      group: "savings",
+      allocation: alloc({ savings: S }),
+    },
+    {
       id: "repay",
       label: "Pay down the home loan",
       summary:

@@ -333,6 +333,10 @@ export default function App() {
               baseline={
                 report?.results.find((r) => r.id === "offset") ?? null
               }
+              savings={
+                report?.results.find((r) => r.id === "savings") ?? null
+              }
+              savingsRate={household.assumptions.savingsRate ?? 0.045}
             />
           ) : null}
           {selected ? (
@@ -531,8 +535,8 @@ function HouseholdForm({
             />
           </Field>
           <Field
-            label="Of which, not yours"
-            tip="Money sitting in the offset that isn't yours to keep — a family loan you have to repay, for example. It still cuts home-loan interest while it sits there, but it's left out of net wealth and never auto-invested."
+            label="Of which, leave uninvested"
+            tip="Cash already in the offset that you want left sitting there. It still cuts home-loan interest, it still counts in your wealth, and the plan never puts it into shares."
           >
             <NumInput
               value={h.loan.restrictedOffset ?? 0}
@@ -578,7 +582,7 @@ function HouseholdForm({
 
       <div className="section">
         <h3>
-          <Tip text="Offset builds up to whichever is bigger — enough to fully cover the home loan (so you stop paying home-loan interest), or the restricted floor. Only once it's past that does the excess get invested. The split itself is not offset.">
+          <Tip text="Offset builds up to whichever is bigger — enough to fully cover the home loan (so you stop paying home-loan interest), or the cash you leave uninvested. Only once it's past that does the excess get invested. The split itself is not offset.">
             Idle offset
           </Tip>
         </h3>
@@ -588,7 +592,7 @@ function HouseholdForm({
             checked={h.assumptions.sweepIdleOffset !== false}
             onChange={(e) => setA({ sweepIdleOffset: e.target.checked })}
           />
-          <Tip text="Each month, offset above the home loan balance (or the restricted floor, whichever is bigger) buys growth shares in your spouse's name. Unlevered. Turn this off to leave the cash sitting in the offset instead.">
+          <Tip text="Each month, offset above the home loan balance (or the cash you leave uninvested, whichever is bigger) buys growth shares in your spouse's name. Unlevered. Turn this off to leave the cash sitting in the offset instead.">
             Invest offset above loan parity
           </Tip>
         </label>
@@ -651,7 +655,7 @@ function HouseholdForm({
         </Field>
         <Field
           label="Minimum cash to keep"
-          tip="Cash you always want on hand for sudden things. It stays in the offset — still cutting your loan interest — but the plan won't invest it. Sits on top of the restricted offset (which isn't yours at all) and on top of whatever is currently saved toward the next holiday, so a holiday doesn't eat into it."
+          tip="Cash you always want on hand for sudden things. It stays in the offset — still cutting your loan interest — but the plan won't invest it. Sits on top of the cash you leave uninvested, and on top of whatever is currently saved toward the next holiday, so a holiday doesn't eat into it."
         >
           <NumInput
             value={h.assumptions.minimumCash}
@@ -769,6 +773,16 @@ function HouseholdForm({
               value={h.assumptions.inflationRate * 100}
               digits={1}
               onChange={(n) => setA({ inflationRate: n / 100 })}
+            />
+          </Field>
+          <Field
+            label="Savings account rate %"
+            tip="What the bank pays on the savings-account comparison, before tax. Interest is taxed each year in the lower-rate name. The balance does not reduce the home loan. Change it to match the account. It is not a live rate."
+          >
+            <NumInput
+              value={(h.assumptions.savingsRate ?? 0.045) * 100}
+              digits={2}
+              onChange={(n) => setA({ savingsRate: n / 100 })}
             />
           </Field>
           <Field
@@ -1182,7 +1196,7 @@ function Ledger({
             </Tip>
           </th>
           <th style={{ textAlign: "right" }}>
-            <Tip text="Household net wealth at the horizon without selling the shares. Super, taxable shares, offset, and cash, minus all loans. House value is left out because it is the same in every row.">
+            <Tip text="Household net wealth at the horizon without selling the shares. Super, taxable shares, savings, offset, and cash, minus all loans. House value is left out because it is the same in every row.">
               If held
             </Tip>
           </th>
@@ -1192,7 +1206,7 @@ function Ledger({
             </Tip>
           </th>
           <th style={{ textAlign: "right" }}>
-            <Tip text="What you could spend without touching super. Shares, offset, and cash, minus loans. Negative means those liquid bits are still less than the debt.">
+            <Tip text="What you could spend without touching super. Shares, savings, offset, and cash, minus loans. Negative means those liquid bits are still less than the debt.">
               Accessible
             </Tip>
           </th>
@@ -1229,34 +1243,174 @@ function Ledger({
   );
 }
 
+type ChartPoint = {
+  year: number;
+  netWealth: number;
+  superBal: number;
+  investBal: number;
+  offsetBal: number;
+  savingsBal: number;
+  homeBal: number;
+  invBal: number;
+  lockedBal: number;
+  offsetBaseline: number | null;
+  savingsBaseline: number | null;
+};
+
+function versusThis(here: number, there: number): string {
+  const gap = there - here;
+  if (Math.abs(gap) < 1) return "about the same";
+  return gap > 0 ? `${money(gap)} more than this` : `${money(-gap)} less than this`;
+}
+
+function ChartTip({
+  active,
+  payload,
+  strategy,
+}: {
+  active?: boolean;
+  payload?: ReadonlyArray<{ payload?: ChartPoint }>;
+  strategy: string;
+}) {
+  const row = payload?.[0]?.payload;
+  if (!active || !row) return null;
+
+  const holds: { label: string; color: string; value: number; note?: string }[] = [
+    { label: "Super", color: "#243868", value: row.superBal },
+    { label: "Investments", color: "#b8892d", value: row.investBal },
+    {
+      label: "Offset",
+      color: "#1f6b4a",
+      value: row.offsetBal,
+      note: row.lockedBal > 1 ? `${money(row.lockedBal)} of this stays uninvested` : undefined,
+    },
+    { label: "Savings account", color: "#3d7ec4", value: row.savingsBal },
+  ].filter((item) => item.value > 1);
+
+  const owes = [
+    { label: "Home loan", color: "#a13d2f", value: row.homeBal },
+    { label: "Investment loan", color: "#c2703d", value: row.invBal },
+    { label: "Offset overdrawn", color: "#1f6b4a", value: row.offsetBal < -1 ? -row.offsetBal : 0 },
+  ].filter((item) => item.value > 1);
+
+  const compared = [
+    row.offsetBaseline == null
+      ? null
+      : { label: "Park in offset", color: "#5c6b66", value: row.offsetBaseline },
+    row.savingsBaseline == null
+      ? null
+      : { label: "Left in savings", color: "#1d4e89", value: row.savingsBaseline },
+  ].filter((item) => item != null);
+
+  return (
+    <div className="chart-tip">
+      <p className="chart-tip-when">{row.year === 0 ? "Now" : `Year ${row.year}`}</p>
+      <p className="chart-tip-strategy">{strategy}</p>
+      <div className="chart-tip-net">
+        <span>Net wealth</span>
+        <b>{money(row.netWealth)}</b>
+      </div>
+      {holds.length ? (
+        <>
+          <p className="chart-tip-group">Holds</p>
+          <ul>
+            {holds.map((item) => (
+              <li key={item.label} className={item.note ? "cmp" : undefined}>
+                <i className="swatch" style={{ background: item.color }} />
+                <span>{item.label}</span>
+                <b>{money(item.value)}</b>
+                {item.note ? <span className="delta">{item.note}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {owes.length ? (
+        <>
+          <p className="chart-tip-group">Owes</p>
+          <ul>
+            {owes.map((item) => (
+              <li key={item.label}>
+                <i className="swatch" style={{ background: item.color }} />
+                <span>{item.label}</span>
+                <b>{money(item.value)}</b>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {compared.length ? (
+        <>
+          <p className="chart-tip-group">Compared with</p>
+          <ul>
+            {compared.map((item) => (
+              <li key={item.label} className="cmp">
+                <i className="swatch" style={{ background: item.color }} />
+                <span>{item.label}</span>
+                <b>{money(item.value)}</b>
+                <span className="delta">{versusThis(row.netWealth, item.value)}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function ChartPanel({
   selected,
   baseline,
+  savings,
+  savingsRate,
 }: {
   selected: ScenarioResult;
   baseline: ScenarioResult | null;
+  savings: ScenarioResult | null;
+  savingsRate: number;
 }) {
+  const showOffset = baseline != null && baseline.id !== selected.id;
+  const showSavings = savings != null && savings.id !== selected.id;
   const chart = useMemo(() => {
     const years = selected.years;
-    const baseYears = baseline?.years ?? [];
+    const baseYears = showOffset ? (baseline?.years ?? []) : [];
+    const saveYears = showSavings ? (savings?.years ?? []) : [];
     return years.map((y) => {
       return {
         year: y.year,
         super: y.superTotal,
         investments: y.taxableTotal,
         offset: Math.max(0, y.offset + y.cash),
+        savings: Math.max(0, y.savings ?? 0),
         homeLoan: -Math.max(0, y.homeLoan),
         investmentLoan: -Math.max(0, y.investmentLoan),
-        locked: -Math.max(0, y.restrictedOffset),
         netWealth: y.netWealth,
+        superBal: y.superTotal,
+        investBal: y.taxableTotal,
+        offsetBal: y.offset + y.cash,
+        savingsBal: y.savings ?? 0,
+        homeBal: y.homeLoan,
+        invBal: y.investmentLoan,
+        lockedBal: y.restrictedOffset,
         offsetBaseline:
           baseYears.find((b) => b.year === y.year)?.netWealth ?? null,
+        savingsBaseline:
+          saveYears.find((b) => b.year === y.year)?.netWealth ?? null,
       };
     });
-  }, [selected, baseline]);
-  const hasLocked = chart.some((c) => c.locked < 0);
+  }, [selected, baseline, savings, showOffset, showSavings]);
+  const hasSavings = chart.some((c) => c.savings > 0);
+  const note = [
+    showOffset ? "Grey dashes: the same life with the lump parked in the offset." : "",
+    showSavings
+      ? `Blue dashes: the same life with the lump left in a savings account at ${pct(savingsRate, 2)}, interest taxed in the lower-rate name.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
+    <>
     <div className="chart-wrap">
       <ResponsiveContainer>
         <AreaChart data={chart} margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
@@ -1272,9 +1426,22 @@ function ChartPanel({
             width={48}
           />
           <Tooltip
-            formatter={(v) => money(Number(v ?? 0))}
-            labelFormatter={(y) => `Year ${y}`}
-            wrapperStyle={{ zIndex: 20 }}
+            allowEscapeViewBox={{ x: false, y: true }}
+            content={(props) => (
+              <ChartTip
+                active={props.active}
+                payload={props.payload}
+                strategy={selected.label}
+              />
+            )}
+            contentStyle={{
+              margin: 0,
+              padding: 0,
+              background: "transparent",
+              border: "none",
+              whiteSpace: "normal",
+            }}
+            wrapperStyle={{ zIndex: 20, pointerEvents: "none" }}
           />
           <Legend />
           <Area
@@ -1307,6 +1474,18 @@ function ChartPanel({
             fillOpacity={0.8}
             isAnimationActive={false}
           />
+          {hasSavings ? (
+            <Area
+              type="linear"
+              stackId="assets"
+              dataKey="savings"
+              name="Savings account"
+              stroke="#1d4e89"
+              fill="#3d7ec4"
+              fillOpacity={0.85}
+              isAnimationActive={false}
+            />
+          ) : null}
           <Area
             type="linear"
             stackId="debt"
@@ -1327,18 +1506,6 @@ function ChartPanel({
             fillOpacity={0.55}
             isAnimationActive={false}
           />
-          {hasLocked ? (
-            <Area
-              type="linear"
-              stackId="debt"
-              dataKey="locked"
-              name="Locked (not yours)"
-              stroke="#6b4c7a"
-              fill="#6b4c7a"
-              fillOpacity={0.55}
-              isAnimationActive={false}
-            />
-          ) : null}
           <Line
             type="linear"
             dataKey="netWealth"
@@ -1348,11 +1515,11 @@ function ChartPanel({
             dot={false}
             isAnimationActive={false}
           />
-          {baseline && baseline.id !== selected.id ? (
+          {showOffset ? (
             <Line
               type="linear"
               dataKey="offsetBaseline"
-              name={baseline.label}
+              name={baseline?.label ?? "Park in offset"}
               stroke="#5c6b66"
               strokeWidth={1.5}
               strokeDasharray="4 4"
@@ -1360,9 +1527,23 @@ function ChartPanel({
               isAnimationActive={false}
             />
           ) : null}
+          {showSavings ? (
+            <Line
+              type="linear"
+              dataKey="savingsBaseline"
+              name="Left in savings"
+              stroke="#1d4e89"
+              strokeWidth={2}
+              strokeDasharray="6 4"
+              dot={false}
+              isAnimationActive={false}
+            />
+          ) : null}
         </AreaChart>
       </ResponsiveContainer>
     </div>
+    {note ? <p className="chart-note">{note}</p> : null}
+    </>
   );
 }
 
@@ -1375,6 +1556,12 @@ const LUMP_BUCKETS: Record<
     chip: "offset",
     what: "into the home-loan offset, still spendable",
     tip: "Cash against the mortgage. Cuts interest. You can still take it out.",
+  },
+  savings: {
+    who: "Household",
+    chip: "savings account",
+    what: "into a bank savings account, still spendable",
+    tip: "Earns the savings rate. Interest is taxed in the lower-rate name. It does not cut the home-loan interest.",
   },
   extra_repay: {
     who: "Household",
@@ -1472,6 +1659,8 @@ function putLine(a: Record<string, number>): string {
 const EXECUTION_TIP: Partial<Record<string, string>> = {
   offset:
     "A transfer into your existing offset account — usually lands same-day.",
+  savings:
+    "Leave it in a savings account in the lower-rate name. It earns interest, and that interest is taxed. It does not cut the home-loan interest the way the offset does.",
   extra_repay:
     "A lump-sum payment straight to the loan. If it's fixed-rate, check for break costs or an annual extra-repayment limit first.",
   debt_recycle_you_growth:
@@ -1668,7 +1857,7 @@ function FlowPopover({
 
         <h5>What the offset holds</h5>
         {restricted > 0.5 ? (
-          <Row label="Restricted — not yours" value={restricted} cls="flow-part" />
+          <Row label="Left uninvested" value={restricted} cls="flow-part" />
         ) : null}
         <Row label="Emergency fund" value={a.minimumCash} cls="flow-part" />
         <Row label="Saved toward the holiday" value={month.holidayReserved} cls="flow-part" />
@@ -1781,9 +1970,9 @@ function HowToDoIt({
         <Tip text="Pay — your income alone, or combined with your spouse's, per the 'Spouse's pay counts toward the shared budget' setting above — minus the home-loan payment (principal and interest), the investment-loan interest, your living expenses, and the holiday fund in the month it lands. Standard PAYG withholding; accounts for a novated lease ending partway through, if you've set one. Does not include the tax refund the investment-loan deduction earns you; that lands as one lump sum at tax time (around July), not smoothed into each month. It can go negative in a month a big holiday outruns your pay — the offset covers the difference.">
           "Spare cash" is pay in, every cost out, for that period alone.
         </Tip>{" "}
-        <Tip text="Your pay and dividends land in a cash pool, every cost comes out of it, and whatever is left empties into the offset that same month — so the pool never carries a balance worth showing. The offset is the household's everyday account, which is why a holiday bigger than one month's pay simply draws it down. Remember the restricted amount inside the offset is not yours to spend.">
-          The offset column is your spendable balance — less the restricted
-          amount, which is not yours.
+        <Tip text="Your pay and dividends land in a cash pool, every cost comes out of it, and whatever is left empties into the offset that same month — so the pool never carries a balance worth showing. The offset is the household's everyday account, which is why a holiday bigger than one month's pay simply draws it down. Cash you leave uninvested stays in this balance; the plan just won't put it into shares.">
+          The offset column is your spendable balance, including cash you
+          leave uninvested.
         </Tip>
       </p>
       <div className="plan-table-wrap">
@@ -1910,10 +2099,18 @@ function Detail({
         </Stat>
         <Stat
           label="Accessible, not super"
-          tip="Money you could spend without breaking into super. Taxable shares, offset, and cash, minus loans. Negative means those liquid bits are still smaller than the debt, so the lump is sitting in super."
+          tip="Money you could spend without breaking into super. Taxable shares, savings, offset, and cash, minus loans. Negative means those liquid bits are still smaller than the debt, so the lump is sitting in super."
         >
           {money(selected.accessible)}
         </Stat>
+        {selected.savings > 1 ? (
+          <Stat
+            label="Savings account"
+            tip="The lump left in the bank, plus interest credited along the way. Tax on that interest is paid out of the offset, so this figure is the account itself."
+          >
+            {money(selected.savings)}
+          </Stat>
+        ) : null}
         <Stat
           label="Net debt"
           tip="Home loan plus investment loan minus offset. A negative number means the offset is bigger than the loans, so you are ahead on the mortgage side."

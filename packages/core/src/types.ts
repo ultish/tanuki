@@ -104,9 +104,9 @@ export type Loan = {
   monthlyRepayment?: number;
   interestOnly: boolean;
   /**
-   * Offset money that isn't yours (e.g. a family loan you must repay).
-   * Still reduces home-loan interest while it sits there, but it's excluded
-   * from net wealth and never swept into investments.
+   * A slice of the offset the household owns and will leave sitting there.
+   * It still reduces home-loan interest, still counts in net wealth, and
+   * is never swept into investments.
    */
   restrictedOffset?: number;
   /**
@@ -174,6 +174,12 @@ export type Assumptions = {
    * be un-set over a PUT, only ever set.
    */
   investmentLoanRate: number | null;
+  /**
+   * Interest a bank savings account pays, effective p.a., before tax.
+   * Used by the "leave it in a savings account" comparison. The balance
+   * does not reduce home-loan interest. Interest is taxed as income.
+   */
+  savingsRate: number;
   /**
    * Park the year's net tax settlement (investment-loan deduction, yield
    * tax, concessional-contribution refunds/Division 293/excess tax) in the
@@ -257,6 +263,7 @@ export type Household = {
  */
 export type BucketId =
   | "offset"
+  | "savings"
   | "extra_repay"
   | "taxable_you_growth"
   | "taxable_you_income"
@@ -277,6 +284,7 @@ export type ScenarioDef = {
   summary: string;
   group:
     | "loan"
+    | "savings"
     | "taxable"
     | "recycle"
     | "super"
@@ -300,7 +308,9 @@ export type YearRow = {
   offset: number;
   /** Everyday cash pool at the end of the period — pay in, costs out, surplus swept to offset. */
   cash: number;
-  /** Offset money that isn't yours (see Loan.restrictedOffset). Constant for the run. */
+  /** Bank savings account. Earns `savingsRate`. Does not reduce the home loan. */
+  savings: number;
+  /** Slice of the offset left uninvested (see Loan.restrictedOffset). Constant for the run. */
   restrictedOffset: number;
   netDebt: number;
   homeInterest: number;
@@ -348,6 +358,8 @@ export type MonthRow = {
   investmentLoan: number;
   offset: number;
   cash: number;
+  /** Bank savings account at month end. */
+  savings: number;
   invested: number;
   homeInterest: number;
   /** Total home-loan payment (principal + interest) for the month. */
@@ -396,6 +408,8 @@ export type ScenarioResult = {
   investmentOutsideSuper: number;
   homeLoan: number;
   offset: number;
+  /** Savings-account balance at the horizon. Zero unless the lump was left there. */
+  savings: number;
   investmentLoan: number;
   netDebt: number;
   totalHomeInterest: number;
@@ -455,6 +469,11 @@ export type OpeningPosition = {
   superYou: number;
   superSpouse: number;
   cash: number;
+  /**
+   * Savings-account balance carried into a run that does not start from
+   * nothing. Absent on positions saved before that account existed.
+   */
+  savings?: number;
   lots: OpeningLot[];
   /** The P&I repayment in force, so the new run doesn't silently re-amortise. */
   scheduledPayment: number;

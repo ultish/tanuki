@@ -49,6 +49,7 @@ import {
 
 const BUCKETS: BucketId[] = [
   "offset",
+  "savings",
   "extra_repay",
   "taxable_you_growth",
   "taxable_you_income",
@@ -166,7 +167,14 @@ type SimState = {
   superSpouse: number;
   sleeves: SleeveState[];
   cash: number;
+  /** Bank savings. Earns the savings rate. Does not offset the home loan. */
+  savings: number;
 };
+
+/** Interest is assessed to the lower marginal rate. A tie stays in your name. */
+function savingsOwner(household: Household): PersonId {
+  return household.spouse.marginalRate < household.you.marginalRate ? "spouse" : "you";
+}
 
 export function allocationSum(a: Allocation): number {
   let s = 0;
@@ -311,6 +319,17 @@ export function simulate(
   const months = Math.max(1, Math.round(a.horizonYears * 12));
   const start = a.startDate;
   const planSince = opts.planSince ?? start;
+  // A run carried on from an opening keeps the original plan's calendar:
+  // its plan years, fund distributions, and the growth already applied to
+  // income, contributions and expenses. `yearIndex` stays 0 for the rest of
+  // the plan year the run starts in; `yearsIn` is how many full plan years
+  // came before it.
+  const planAnchor = opening ? planSince : start;
+  const phase = Math.max(0, monthsBetweenIso(planAnchor, start));
+  const yearsIn = Math.floor(phase / 12);
+  const p = phase % 12;
+  const yearStart = addMonthsIso(start, -p);
+  const yearOf = (m: number): number => Math.floor((m + p) / 12);
 
   // Dated rate changes. With none recorded this is the loan's own rate.
   const rateEvents = [...(household.loan.rateEvents ?? [])].sort((x, y) =>
@@ -341,6 +360,7 @@ export function simulate(
         superSpouse: opening.superSpouse,
         sleeves: [],
         cash: opening.cash,
+        savings: opening.savings ?? 0,
       }
     : {
         homeLoan: household.loan.balance,
@@ -350,6 +370,7 @@ export function simulate(
         superSpouse: household.spouse.superBalance,
         sleeves: [],
         cash: 0,
+        savings: 0,
       };
 
   const personOf = (id: PersonId): Person => (id === "you" ? household.you : household.spouse);
@@ -455,6 +476,8 @@ export function simulate(
 
   state.offset += placement.offset ?? 0;
   addFlow("offset", placement.offset ?? 0);
+  state.savings += placement.savings ?? 0;
+  addFlow("savings", placement.savings ?? 0);
   const repay = placement.extra_repay ?? 0;
   if (repay > 0) {
     const pay = Math.min(repay, state.homeLoan);
@@ -504,12 +527,12 @@ export function simulate(
   const incomeGrowth = a.incomeGrowthRate ?? 0;
 
   const pay = {
-    you: paySchedule(household.you, start, incomeGrowth),
-    spouse: paySchedule(household.spouse, start, incomeGrowth),
+    you: paySchedule(household.you, planAnchor, incomeGrowth),
+    spouse: paySchedule(household.spouse, planAnchor, incomeGrowth),
   };
   const meanOverYear = (f: (m: number) => number, yearIndex: number): number => {
     let s = 0;
-    for (let i = 0; i < 12; i++) s += f(yearIndex * 12 + i);
+    for (let i = 0; i < 12; i++) s += f((yearsIn + yearIndex) * 12 + i);
     return s / 12;
   };
 
@@ -517,23 +540,23 @@ export function simulate(
     const sched = pay[person.id];
     const base = sched
       ? meanOverYear(sched.taxableAt, yearIndex)
-      : person.taxableIncome * Math.pow(1 + incomeGrowth, yearIndex);
+      : person.taxableIncome * Math.pow(1 + incomeGrowth, yearsIn + yearIndex);
     return (
       base +
-      leaseAddback(person, start, yearIndex) -
-      laterLeaseDeduction(person, start, yearIndex)
+      leaseAddback(person, yearStart, yearIndex) -
+      laterLeaseDeduction(person, yearStart, yearIndex)
     );
   };
 
   /** Taxable income in force this month, as an annual rate — for monthly pay. */
   const incomeThisMonth = (person: Person, m: number): number => {
     const sched = pay[person.id];
-    const yearIndex = Math.floor(m / 12);
+    const yearIndex = yearOf(m);
     if (!sched) return grownIncome(person, yearIndex);
     return (
-      sched.taxableAt(m) +
-      leaseAddback(person, start, yearIndex) -
-      laterLeaseDeduction(person, start, yearIndex)
+      sched.taxableAt(m + phase) +
+      leaseAddback(person, yearStart, yearIndex) -
+      laterLeaseDeduction(person, yearStart, yearIndex)
     );
   };
 
@@ -630,7 +653,7 @@ export function simulate(
   const expenseGrowth = (iso: string): number =>
     Math.pow(
       1 + (a.expenseInflationRate ?? 0),
-      Math.floor(Math.max(0, monthsBetweenIso(start, iso)) / 12),
+      Math.floor(Math.max(0, monthsBetweenIso(planAnchor, iso)) / 12),
     );
 
   const holidayProvisionFor = (iso: string): number => {
@@ -643,9 +666,9 @@ export function simulate(
     if (!a.sweepIdleOffset) return;
     // Floor is whichever protects more right now: enough to fully offset
     // the home loan (so no home-loan interest is being paid), or the money
-    // that has to stay liquid — restricted offset, the everyday cash
-    // buffer, and whatever's saved toward the next holiday. Not the two
-    // rules added together, since money sitting in the account already
+    // that has to stay liquid — the slice left uninvested, the everyday
+    // cash buffer, and whatever's saved toward the next holiday. Not the
+    // two rules added together, since money sitting in the account already
     // counts toward offsetting the loan. Once the loan is smaller than what
     // must stay liquid (or paid off), that's the floor.
     const offsetTarget = Math.max(state.homeLoan, restrictedOffset + minimumCash);
@@ -710,8 +733,14 @@ export function simulate(
       return;
     }
     if (v < 0) return;
-    const yearIndex = Math.floor(m / 12);
+    const yearIndex = yearOf(m);
     switch (k) {
+      case "savings": {
+        state.offset -= v;
+        state.savings += v;
+        addFlow(k, v);
+        return;
+      }
       case "extra_repay": {
         const paid = Math.min(v, state.homeLoan);
         state.homeLoan -= paid;
@@ -838,10 +867,10 @@ export function simulate(
       taxableTotal +
       superTotal +
       state.offset +
-      state.cash -
+      state.cash +
+      state.savings -
       state.homeLoan -
-      state.invLoan -
-      restrictedOffset;
+      state.invLoan;
     return {
       netWealth,
       accessible: netWealth - superTotal,
@@ -851,8 +880,9 @@ export function simulate(
       investmentLoan: state.invLoan,
       offset: state.offset,
       cash: state.cash,
+      savings: state.savings,
       restrictedOffset,
-      netDebt: state.homeLoan + state.invLoan + restrictedOffset - state.offset,
+      netDebt: state.homeLoan + state.invLoan - state.offset,
     };
   };
 
@@ -879,6 +909,7 @@ export function simulate(
     investmentLoan: round2(day0.investmentLoan),
     offset: round2(day0.offset),
     cash: round2(day0.cash),
+    savings: round2(day0.savings),
     restrictedOffset: round2(day0.restrictedOffset),
     netDebt: round2(day0.netDebt),
     homeInterest: 0,
@@ -909,13 +940,13 @@ export function simulate(
   // excess-over-cap and Division 293 consequences are handled separately by
   // concessionalExtraTax, once per year (see the main loop).
   const sacrifice = (person: Person, yearIndex: number): number =>
-    Math.max(0, person.extraConcessionalThisFy) * Math.pow(1 + incomeGrowth, yearIndex);
+    Math.max(0, person.extraConcessionalThisFy) * Math.pow(1 + incomeGrowth, yearsIn + yearIndex);
   const yearWorkConcessional = (person: Person, yearIndex: number): number => {
     const sched = pay[person.id];
     if (!sched) {
       return (
         (Math.max(0, person.employerSgThisFy) + Math.max(0, person.extraConcessionalThisFy)) *
-        Math.pow(1 + incomeGrowth, yearIndex)
+        Math.pow(1 + incomeGrowth, yearsIn + yearIndex)
       );
     }
     return meanOverYear(sched.sgAt, yearIndex) + sacrifice(person, yearIndex);
@@ -923,15 +954,22 @@ export function simulate(
   /** SG + salary sacrifice in force this month, as an annual rate. */
   const workConcessionalThisMonth = (person: Person, m: number): number => {
     const sched = pay[person.id];
-    const yearIndex = Math.floor(m / 12);
+    const yearIndex = yearOf(m);
     if (!sched) return yearWorkConcessional(person, yearIndex);
-    return sched.sgAt(m) + sacrifice(person, yearIndex);
+    return sched.sgAt(m + phase) + sacrifice(person, yearIndex);
   };
-  type YearTax = { assessable: number; franking: number; deductions: number };
+  type YearTax = {
+    assessable: number;
+    franking: number;
+    deductions: number;
+    /** Savings-account interest. Taxed, but not "yield" — no franking, no CGT. */
+    interest: number;
+  };
   const emptyTax = (): YearTax => ({
     assessable: 0,
     franking: 0,
     deductions: 0,
+    interest: 0,
   });
   let youYear = emptyTax();
   let spouseYear = emptyTax();
@@ -950,7 +988,7 @@ export function simulate(
     return (
       taxDelta(
         personBase(id, yearIndex),
-        st.assessable - st.deductions,
+        st.assessable + st.interest - st.deductions,
         p.medicareLevy,
       ) - st.franking
     );
@@ -972,18 +1010,18 @@ export function simulate(
     if (m > 0) flows = {};
     const crossedCutover =
       prevDate < "2027-07-01" && date >= "2027-07-01";
-    if (m > 0 && m % 12 === 0) {
+    if (m > 0 && (m + p) % 12 === 0) {
       youYear = emptyTax();
       spouseYear = emptyTax();
       prevYearNet = 0;
       prevInvIncomeTax = 0;
     }
-    const yearIndex = Math.floor(m / 12);
+    const yearIndex = yearOf(m);
 
     // Year one's ongoing-contribution tax is already folded into
     // contributeCc (combined with the lump, if any). From year two on there
     // is no lump to combine with, so assess it directly, once per year.
-    if (m % 12 === 0 && yearIndex >= 1) {
+    if ((m + p) % 12 === 0 && yearIndex >= 1) {
       const extraYou = concessionalExtraTax(
         household.you,
         grownIncome(household.you, yearIndex),
@@ -1076,6 +1114,15 @@ export function simulate(
     state.superYou += (workConcessionalThisMonth(household.you, m) * ccTax) / 12;
     state.superSpouse += (workConcessionalThisMonth(household.spouse, m) * ccTax) / 12;
 
+    // Gross interest stays in the account. Tax on it joins this year's
+    // assessment and is settled with everything else, usually out of the offset.
+    const savingsInterest = state.savings * monthlyRate(a.savingsRate ?? 0);
+    if (savingsInterest !== 0) {
+      state.savings += savingsInterest;
+      const bucket = savingsOwner(household) === "you" ? youYear : spouseYear;
+      bucket.interest += savingsInterest;
+    }
+
     const interestDeductionThisMonth = invInterest;
 
     for (const sl of state.sleeves) {
@@ -1097,7 +1144,7 @@ export function simulate(
       const perYear = Math.min(12, Math.max(1, Math.round(sl.sleeve.distributionsPerYear)));
       const everyNMonths = Math.round(12 / perYear);
       const distributes =
-        (m + 1) % everyNMonths === 0 || (m === months - 1 && !opts.midStream);
+        (m + p + 1) % everyNMonths === 0 || (m === months - 1 && !opts.midStream);
       if (!distributes) continue;
       const yieldCash = sl.accruedYield;
       sl.accruedYield = 0;
@@ -1184,6 +1231,7 @@ export function simulate(
       investmentLoan: round2(monthSnap.investmentLoan),
       offset: round2(monthSnap.offset),
       cash: round2(monthSnap.cash),
+      savings: round2(monthSnap.savings),
       invested: round2(periodInvested),
       homeInterest: round2(home.interest),
       homeLoanPayment: round2(home.payment),
@@ -1210,8 +1258,8 @@ export function simulate(
     yearHolidaySpend += holidaySpendThisMonth;
     yearSpareCash += monthSpareCash;
 
-    if ((m + 1) % 12 === 0 || m === months - 1) {
-      const year = Math.ceil((m + 1) / 12);
+    if ((m + p + 1) % 12 === 0 || m === months - 1) {
+      const year = yearOf(m) + 1;
       const snap = fillAccessible();
       years.push({
         year,
@@ -1223,6 +1271,7 @@ export function simulate(
         investmentLoan: round2(snap.investmentLoan),
         offset: round2(snap.offset),
         cash: round2(snap.cash),
+        savings: round2(snap.savings),
         restrictedOffset: round2(snap.restrictedOffset),
         netDebt: round2(snap.netDebt),
         homeInterest: round2(yearHomeInterest),
@@ -1247,7 +1296,7 @@ export function simulate(
   }
 
   const endDate = addMonthsIso(start, months);
-  const endYearIndex = Math.max(0, Math.floor((months - 1) / 12));
+  const endYearIndex = yearOf(months - 1);
   let exitCgt = 0;
   let exitCgtIfLegacy = 0;
   for (const sl of state.sleeves) {
@@ -1303,6 +1352,7 @@ export function simulate(
     ),
     homeLoan: round2(state.homeLoan),
     offset: round2(state.offset),
+    savings: round2(state.savings),
     investmentLoan: round2(state.invLoan),
     netDebt: round2(snap.netDebt),
     totalHomeInterest: round2(totalHomeInterest),
@@ -1326,7 +1376,7 @@ export function simulate(
   };
   for (const sl of state.sleeves) accruedYield[`${sl.person.id}_${kindOf(sl)}`] += sl.accruedYield;
   // The plan year the next run starts in, and its one-off contributions so far.
-  const nextYear = Math.floor(months / 12);
+  const nextYear = yearOf(months);
   const ccIn = (id: PersonId) =>
     (nextYear === 0 ? (id === "you" ? ccYou : ccSpouse) : 0) +
     (loggedCc[id].get(nextYear) ?? 0);
@@ -1338,6 +1388,7 @@ export function simulate(
     superYou: state.superYou,
     superSpouse: state.superSpouse,
     cash: state.cash,
+    savings: state.savings,
     lots: state.sleeves.flatMap((sl) =>
       sl.lots.map((l) => ({
         personId: sl.person.id,
@@ -1430,6 +1481,13 @@ function scenarioNotes(
   if ((applied.extra_repay ?? 0) > 0) {
     notes.push(
       "Paying the loan down and parking in the offset save the same interest. Offset is usually nicer because you can still touch the cash.",
+    );
+  }
+  if ((applied.savings ?? 0) > 0) {
+    const rate = Math.round((household.assumptions.savingsRate ?? 0) * 1000) / 10;
+    const who = savingsOwner(household) === "spouse" ? "your spouse's" : "your";
+    notes.push(
+      `The savings balance earns ${rate}% a year. Interest is taxed in ${who} name. Unlike the offset, this cash does not reduce home-loan interest.`,
     );
   }
   if (def.group === "taxable" || def.group === "recycle") {

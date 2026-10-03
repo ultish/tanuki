@@ -156,6 +156,7 @@ export function defaultAssumptions(overrides: Partial<Assumptions> = {}): Assump
     tsbBringForward3y: FY_2026_27.tsbBringForward3y,
     tsbBringForward2y: FY_2026_27.tsbBringForward2y,
     investmentLoanRate: null,
+    savingsRate: 0.045,
     refundsToOffset: true,
     useNccBringForward: true,
     sweepIdleOffset: true,

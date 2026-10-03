@@ -583,9 +583,93 @@ details.assumptions summary {
 }
 
 .chart-wrap {
-  height: 280px;
+  height: 300px;
   margin: 0.9rem 0 0.35rem;
   background: var(--paper);
+}
+
+.chart-note {
+  margin: 0 0 0.85rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.chart-tip {
+  background: #f4f7f5;
+  border: 1px solid #9aaba3;
+  border-radius: 2px;
+  box-shadow: 0 10px 28px #1418162e;
+  padding: 0.5rem 0.7rem 0.55rem;
+  min-width: 15.5rem;
+  max-width: min(20.5rem, calc(100vw - 24px));
+  color: var(--ink);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-tip-when {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chart-tip-strategy {
+  margin: 0.05rem 0 0.4rem;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  line-height: 1.25;
+}
+
+.chart-tip-net {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-weight: 650;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.chart-tip-group {
+  margin: 0.45rem 0 0.12rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chart-tip ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.chart-tip li {
+  display: grid;
+  grid-template-columns: 0.55rem minmax(0, 1fr) auto;
+  gap: 0.08rem 0.45rem;
+  align-items: baseline;
+  margin: 0.1rem 0;
+}
+
+.chart-tip .swatch {
+  width: 0.55rem;
+  height: 0.55rem;
+  grid-row: 1;
+  align-self: center;
+  border-radius: 1px;
+}
+
+.chart-tip li.cmp .swatch {
+  grid-row: 1 / span 2;
+}
+
+.chart-tip li.cmp .delta {
+  grid-column: 2 / -1;
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 
 details.plan h4 {
@@ -1326,4 +1410,23 @@ code {
   cursor: pointer;
   background: none;
   border: 1px solid var(--rule, #cfc7b4);
+}
+
+.committed {
+  margin-top: 0.6rem;
+}
+
+.committed .plan-table td:nth-child(2) {
+  text-align: right;
+}
+
+.committed-note {
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: normal !important;
+}
+
+.committed-head th {
+  position: static;
+  padding-top: 0.6rem;
 }

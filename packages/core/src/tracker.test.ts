@@ -8,6 +8,7 @@ import {
   createReplan,
   createTracker,
   openingAt,
+  openingSummary,
   replanPreview,
   viewTracker,
   type Tracker,
@@ -363,6 +364,56 @@ describe("tracker", () => {
 });
 
 describe("re-plan", () => {
+  it("placing nothing reproduces the plan it replaces, from any month", () => {
+    const base = defaultHousehold();
+    const h = defaultHousehold({
+      lumpSum: 250_000,
+      you: defaultPerson("you", {
+        payEvents: [{ from: "2028-03-01", taxableIncome: 190_000 }],
+        novatedLeaseFortnightly: 400,
+        novatedLeaseEndDate: "2029-05-01",
+      }),
+      assumptions: {
+        ...base.assumptions,
+        startDate: "2026-09-01",
+        horizonYears: 6,
+        incomeGrowthRate: 0.03,
+        expenseInflationRate: 0.03,
+        incomeAsset: { ...base.assumptions.incomeAsset, distributionsPerYear: 4 },
+      },
+    });
+    const parent = track(h, { debt_recycle_you_income: 250_000 });
+    for (const at of ["2026-11", "2028-01", "2029-08"]) {
+      const child = createReplan({
+        id: "t2",
+        createdAt: "2026-10-01T00:00:00Z",
+        label: "Plan B",
+        scenarioLabel: "Carry on",
+        allocation: {},
+        parent,
+        current: h,
+        log: [],
+        at,
+        deploy: 0,
+      });
+      expect(child.baseline.months.at(-1)!.date).toBe(parent.baseline.months.at(-1)!.date);
+      for (const row of child.baseline.months) {
+        const same = parent.baseline.months.find((r) => r.date === row.date)!;
+        expect([at, row.date, row.netWealth]).toEqual([at, row.date, same.netWealth]);
+      }
+    }
+  });
+
+  it("shows a debt-recycle loan and its shares as carried into the re-plan", () => {
+    const h = still();
+    const parent = track(h, { debt_recycle_you_growth: 100_000 });
+    const s = openingSummary(openingAt(parent, h, [], "2027-03"), h);
+    expect(s.investmentLoan).toBe(100_000);
+    expect(s.holdings.map((x) => [x.key, x.value, x.cgtIfSold])).toEqual([
+      ["you_growth", 100_000, 0],
+    ]);
+  });
+
   it("starts where the log says you are and places the new lump from the offset", () => {
     const h = still();
     const parent = track(h, { taxable_you_growth: 250_000 });

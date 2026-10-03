@@ -1,9 +1,10 @@
 import { monthKey, runHousehold, simulate } from "./engine.js";
 import type { RisuLink } from "./risu.js";
-import { addMonthsIso } from "./tax.js";
+import { addMonthsIso, estimateHybridCgt } from "./tax.js";
 import type {
   ActualMonth,
   Allocation,
+  HoldingKey,
   Household,
   MonthRow,
   PersonId,
@@ -11,7 +12,9 @@ import type {
   RunReport,
   ScenarioDef,
   ScenarioResult,
+  SleeveKind,
 } from "./types.js";
+import { HOLDING_KEYS } from "./types.js";
 
 /**
  * A frozen target: the scenario you accepted, as it was projected on the day
@@ -234,7 +237,10 @@ export function viewTracker(
     actuals,
     planSince: t.planSince,
   }).result;
-  const todaysRates = simulate(recorded, def, { opening: t.opening }).result;
+  const todaysRates = simulate(recorded, def, {
+    opening: t.opening,
+    planSince: t.planSince,
+  }).result;
 
   const first = monthKey(t.startDate);
   const lastRow = t.baseline.months.at(-1);
@@ -246,7 +252,10 @@ export function viewTracker(
     }
   }
 
-  const planEnd = simulate(t.baseline.household, def, { opening: t.opening }).result;
+  const planEnd = simulate(t.baseline.household, def, {
+    opening: t.opening,
+    planSince: t.planSince,
+  }).result;
   const { baseline, ...rest } = t;
   return {
     tracker: {
@@ -301,8 +310,8 @@ export function openingAt(
 
 /**
  * Offset you could still move: everything above what has to stay liquid —
- * money that isn't yours, the minimum cash buffer, and what's saved so far
- * toward the next holiday (the same floor the idle sweep respects).
+ * the slice left uninvested, the minimum cash buffer, and what's saved so
+ * far toward the next holiday (the same floor the idle sweep respects).
  */
 export function deployable(opening: OpeningPosition, h: Household): number {
   const a = h.assumptions;
@@ -314,15 +323,103 @@ export function deployable(opening: OpeningPosition, h: Household): number {
   return Math.max(0, opening.offset - floor);
 }
 
+/** One owner's shares in one sleeve, and the tax a sale on the day would cost. */
+export type OpeningHolding = {
+  key: HoldingKey;
+  value: number;
+  cost: number;
+  cgtIfSold: number;
+};
+
+/**
+ * A re-plan's starting point, split by how hard each part is to change.
+ * Super and the investment loan carry into every strategy; shares can be
+ * sold, at a CGT cost; only `deployable` is placed by the strategy picked.
+ */
+export type OpeningSummary = {
+  date: string;
+  offset: number;
+  deployable: number;
+  homeLoan: number;
+  superYou: number;
+  superSpouse: number;
+  /** One-off concessional contributions already made this plan year. */
+  ccThisYear: Record<PersonId, number>;
+  investmentLoan: number;
+  investmentLoanRate: number;
+  holdings: OpeningHolding[];
+  /** The ongoing settings the new plan runs on. */
+  ongoing: {
+    sacrificeFortnightly: Record<PersonId, number>;
+    sweepIdleOffset: boolean;
+  };
+};
+
+export function openingSummary(o: OpeningPosition, h: Household): OpeningSummary {
+  const a = h.assumptions;
+  let homeRate = h.loan.annualRate;
+  for (const e of [...(h.loan.rateEvents ?? [])].sort((x, y) => x.from.localeCompare(y.from))) {
+    if (e.from <= o.date) homeRate = e.annualRate;
+  }
+  const holdings: OpeningHolding[] = HOLDING_KEYS.flatMap((key) => {
+    const [personId, sleeve] = key.split("_") as [PersonId, SleeveKind];
+    const lots = o.lots.filter((l) => l.personId === personId && l.sleeve === sleeve);
+    if (!lots.length) return [];
+    const person = personId === "you" ? h.you : h.spouse;
+    let cgtIfSold = 0;
+    for (const l of lots) {
+      cgtIfSold += estimateHybridCgt({
+        proceeds: l.value,
+        cost: l.cost,
+        acquiredDate: l.acquiredDate,
+        disposedDate: o.date,
+        valueAtCutover: l.valueAtCutover ?? undefined,
+        inflationRate: a.inflationRate,
+        person,
+      }).tax;
+    }
+    return [
+      {
+        key,
+        value: lots.reduce((s, l) => s + l.value, 0),
+        cost: lots.reduce((s, l) => s + l.cost, 0),
+        cgtIfSold,
+      },
+    ];
+  });
+  return {
+    date: o.date,
+    offset: o.offset,
+    deployable: deployable(o, h),
+    homeLoan: o.homeLoan,
+    superYou: o.superYou,
+    superSpouse: o.superSpouse,
+    ccThisYear: o.ccThisYear,
+    investmentLoan: o.invLoan,
+    investmentLoanRate: a.investmentLoanRate ?? homeRate,
+    holdings,
+    ongoing: {
+      sacrificeFortnightly: {
+        you: h.you.extraConcessionalFortnightly,
+        spouse: h.spouse.extraConcessionalFortnightly,
+      },
+      sweepIdleOffset: a.sweepIdleOffset,
+    },
+  };
+}
+
 /**
  * The household a re-plan runs on: today's settings, starting where the log
- * says you are, with `deploy` of the offset as the lump to place.
+ * says you are, with `deploy` of the offset as the lump to place. It ends
+ * when the plan it replaces ends, so the two compare over the same dates.
  */
 function replanSetup(
+  parent: Tracker,
   current: Household,
   opening: OpeningPosition,
   deploy: number,
 ): { household: Household; opening: OpeningPosition } {
+  const months = parent.baseline.months.length - monthsBetween(parent.startDate, opening.date);
   const room = deployable(opening, current);
   if (!(deploy >= 0) || deploy > room + 0.5) {
     throw new Error(
@@ -340,7 +437,7 @@ function replanSetup(
         balance: opening.homeLoan,
         offset: opening.offset - deploy,
       },
-      assumptions: { ...current.assumptions, startDate: opening.date },
+      assumptions: { ...current.assumptions, startDate: opening.date, horizonYears: months / 12 },
     },
     opening: { ...opening, offset: opening.offset - deploy },
   };
@@ -355,7 +452,7 @@ export function replanPreview(
   deploy: number,
   link: RisuLink = NO_LINK,
 ): RunReport {
-  const setup = replanSetup(current, openingAt(parent, current, log, at, link), deploy);
+  const setup = replanSetup(parent, current, openingAt(parent, current, log, at, link), deploy);
   // With nothing to place there's nothing to rank: the only plan is to
   // carry on from here, which is the re-baseline.
   const carryOn: ScenarioDef = {
@@ -385,7 +482,7 @@ export function createReplan(input: {
   link?: RisuLink;
 }): Tracker {
   const opening = openingAt(input.parent, input.current, input.log, input.at, input.link);
-  const setup = replanSetup(input.current, opening, input.deploy);
+  const setup = replanSetup(input.parent, input.current, opening, input.deploy);
   const { result } = simulate(
     setup.household,
     {

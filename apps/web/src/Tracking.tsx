@@ -54,6 +54,7 @@ const METRICS: { id: Metric; label: string }[] = [
 ];
 
 const FLOW_LABELS: Record<string, string> = {
+  savings: "Left in a savings account",
   extra_repay: "Paid off the home loan",
   taxable_you_growth: "Growth shares, your name",
   taxable_you_income: "Dividend shares, your name",
@@ -1079,19 +1080,12 @@ function Replan({
         </Field>
         <Field
           label="Money to place"
-          tip="Taken out of the offset and placed by the strategy you pick. Up to the offset above the restricted floor. Zero re-baselines the same plan from here."
+          tip="Taken out of the offset and placed by the strategy you pick. Up to the offset above the cash you leave uninvested. Zero re-baselines the same plan from here."
         >
           <NumInput value={deploy} onChange={(n) => setDeploy(Math.max(0, n))} />
         </Field>
       </div>
-      {opening ? (
-        <p className="plan-tip">
-          At the start of {monthLabel(at)}: offset {money(opening.offset)} (
-          {money(opening.deployable)} movable), home loan {money(opening.homeLoan)}
-          {opening.investmentLoan > 0.5 ? `, investment loan ${money(opening.investmentLoan)}` : ""}, shares{" "}
-          {money(opening.shares)}, super {money(opening.superYou + opening.superSpouse)}.
-        </p>
-      ) : null}
+      {opening ? <Committed opening={opening} household={household} at={at} /> : null}
       <div className="actions">
         <button
           type="button"
@@ -1117,6 +1111,9 @@ function Replan({
       </div>
       {report ? (
         <>
+          <p className="plan-tip">
+            Where the new {money(deploy)} goes. Everything above carries into each of these.
+          </p>
           <ul className="replan-list">
             {report.results.slice(0, 10).map((r, i) => (
               <li key={r.id}>
@@ -1169,10 +1166,124 @@ function Replan({
       {error ? <p className="warn-list">{error}</p> : null}
       {household.loan.restrictedOffset ? (
         <p className="plan-tip">
-          {money(household.loan.restrictedOffset)} of the offset isn't yours and can't be placed.
+          {money(household.loan.restrictedOffset)} of the offset stays put and isn't placed.
         </p>
       ) : null}
     </details>
+  );
+}
+
+/**
+ * What a re-plan starts from, by how hard it is to change: super is locked,
+ * the investment loan and shares cost something to unwind, and only the
+ * movable offset is placed by the strategy picked below.
+ */
+function Committed({
+  opening,
+  household,
+  at,
+}: {
+  opening: OpeningSummary;
+  household: Household;
+  at: string;
+}) {
+  const name = (id: "you" | "spouse") => household[id].label;
+  const sleeve = (k: "growth" | "income") =>
+    k === "growth" ? household.assumptions.growthAsset.label : household.assumptions.incomeAsset.label;
+  const cc = opening.ccThisYear.you + opening.ccThisYear.spouse;
+  const sac = opening.ongoing.sacrificeFortnightly;
+  const invInterest = opening.investmentLoan * opening.investmentLoanRate;
+  return (
+    <div className="committed">
+      <p className="plan-tip">At the start of {monthLabel(at)}:</p>
+      <table className="plan-table">
+        <tbody>
+          <tr className="committed-head">
+            <th colSpan={3}>
+              <Tip text="Carried into every strategy below. Super stays preserved until retirement.">
+                Locked
+              </Tip>
+            </th>
+          </tr>
+          <tr>
+            <td>Super, {name("you")}</td>
+            <td>{money(opening.superYou)}</td>
+            <td />
+          </tr>
+          <tr>
+            <td>Super, {name("spouse")}</td>
+            <td>{money(opening.superSpouse)}</td>
+            <td />
+          </tr>
+          {cc > 0.5 ? (
+            <tr>
+              <td>One-off concessional this year</td>
+              <td>{money(cc)}</td>
+              <td className="committed-note">already counts against the cap</td>
+            </tr>
+          ) : null}
+          <tr className="committed-head">
+            <th colSpan={3}>
+              <Tip text="Also carried into every strategy below. Changing these means selling shares, which costs CGT and ends the loan's deductible interest. Re-plan never sells for you.">
+                Costs to unwind
+              </Tip>
+            </th>
+          </tr>
+          {opening.investmentLoan > 0.5 ? (
+            <tr>
+              <td>Investment loan</td>
+              <td>{money(opening.investmentLoan)}</td>
+              <td className="committed-note">
+                {(opening.investmentLoanRate * 100).toFixed(2)}%, about {money(invInterest)} a year
+                in deductible interest. Paid down by selling the shares it bought.
+              </td>
+            </tr>
+          ) : null}
+          {opening.holdings.map((h) => {
+            const [who, kind] = h.key.split("_") as ["you" | "spouse", "growth" | "income"];
+            return (
+              <tr key={h.key}>
+                <td>
+                  Shares, {name(who)}, {sleeve(kind)}
+                </td>
+                <td>{money(h.value)}</td>
+                <td className="committed-note">
+                  {h.value - h.cost >= 0 ? "gain" : "loss"} {money(Math.abs(h.value - h.cost))}, roughly{" "}
+                  {money(h.cgtIfSold)} CGT if sold now
+                </td>
+              </tr>
+            );
+          })}
+          {opening.investmentLoan <= 0.5 && !opening.holdings.length ? (
+            <tr>
+              <td colSpan={3} className="committed-note">
+                Nothing yet
+              </td>
+            </tr>
+          ) : null}
+          <tr className="committed-head">
+            <th colSpan={3}>
+              <Tip text="The part the strategy you pick decides. The rest of the offset stays liquid: cash you leave uninvested, the minimum cash buffer, and the holiday fund.">
+                Free to place
+              </Tip>
+            </th>
+          </tr>
+          <tr>
+            <td>Offset, movable</td>
+            <td>{money(opening.deployable)}</td>
+            <td className="committed-note">
+              of {money(opening.offset)}, against a home loan of {money(opening.homeLoan)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p className="plan-tip">
+        Ongoing, from your current settings: salary sacrifice {money(sac.you)} a fortnight for{" "}
+        {name("you")} and {money(sac.spouse)} for {name("spouse")}; idle offset{" "}
+        {opening.ongoing.sweepIdleOffset ? "swept into shares" : "left in the offset"}. Change these
+        under Plans, then re-plan.
+      </p>
+    </div>
   );
 }
 

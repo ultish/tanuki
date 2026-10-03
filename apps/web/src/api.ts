@@ -3,6 +3,7 @@ import type {
   LaterLease,
   Flows,
   HoldingKey,
+  OpeningSummary,
   PayEvent,
   RateEvent,
   RisuLink,
@@ -14,6 +15,7 @@ export type {
   Flows,
   HoldingKey,
   LaterLease,
+  OpeningSummary,
   PayEvent,
   RateEvent,
   RisuLink,
@@ -79,6 +81,7 @@ export type Assumptions = {
   tsbBringForward3y: number;
   tsbBringForward2y: number;
   investmentLoanRate: number | null;
+  savingsRate: number;
   refundsToOffset: boolean;
   useNccBringForward: boolean;
   sweepIdleOffset: boolean;
@@ -111,6 +114,7 @@ export type YearRow = {
   investmentLoan: number;
   offset: number;
   cash: number;
+  savings: number;
   restrictedOffset: number;
   netDebt: number;
   homeInterest: number;
@@ -138,6 +142,7 @@ export type MonthRow = {
   investmentLoan: number;
   offset: number;
   cash: number;
+  savings: number;
   invested: number;
   homeInterest: number;
   homeLoanPayment: number;
@@ -172,6 +177,7 @@ export type ScenarioResult = {
   investmentOutsideSuper: number;
   homeLoan: number;
   offset: number;
+  savings: number;
   investmentLoan: number;
   netDebt: number;
   totalHomeInterest: number;
@@ -269,17 +275,6 @@ export type TrackerSummary = {
   parentId?: string;
   planSince: string;
   months: number;
-};
-
-export type OpeningSummary = {
-  date: string;
-  offset: number;
-  homeLoan: number;
-  investmentLoan: number;
-  superYou: number;
-  superSpouse: number;
-  shares: number;
-  deployable: number;
 };
 
 export const listTrackers = () => send<TrackerSummary[]>("GET", "/api/trackers");

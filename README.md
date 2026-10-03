@@ -15,6 +15,7 @@ Risu is “what we already own.” Tanuki is “what we do with new money.” Bu
 Given a lump plus your loan, offset, incomes, and super:
 
 - Park in the **offset** vs **pay down** the home loan
+- Leave the lump in a **savings account** (a rate you set, interest taxed in the lower-rate name). Drawn on every chart, so the other strategies have a "just leave it in the bank" line to beat
 - **Debt recycle** — pay the lump onto the home loan, redraw it as an investment split in your name, buy a growth or income sleeve
 - Taxable **growth vs income**, in your name or your spouse’s
 - **Concessional** super (personal deductible) — yours vs your spouse’s. The deduction is worth more in the higher-rate name

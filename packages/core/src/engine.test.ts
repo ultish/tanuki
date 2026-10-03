@@ -659,10 +659,10 @@ describe("idle offset sweep", () => {
   });
 });
 
-describe("restricted offset (not yours)", () => {
-  it("is excluded from net wealth but still offsets home-loan interest", () => {
+describe("restricted offset (left uninvested)", () => {
+  it("counts in net wealth and still offsets home-loan interest", () => {
     // sweepIdleOffset off, and the loan balance kept well above offset, so
-    // this isolates the net-wealth/interest effect from the sweep mechanic
+    // this isolates wealth and interest from the sweep mechanic
     // (covered separately below).
     const noSweep = defaultAssumptions({ ...zeroMarket, sweepIdleOffset: false });
     const h1 = hush({
@@ -688,7 +688,8 @@ describe("restricted offset (not yours)", () => {
     });
     const a = runScenario(h1, def("o", { offset: h1.lumpSum }));
     const b = runScenario(h2, def("o", { offset: h2.lumpSum }));
-    expect(a.netWealth - b.netWealth).toBeCloseTo(50_000, 0);
+    expect(a.netWealth).toBeCloseTo(b.netWealth, 0);
+    expect(a.netDebt).toBeCloseTo(b.netDebt, 0);
     expect(a.offset).toBeCloseTo(b.offset, 0);
     expect(a.totalHomeInterest).toBeCloseTo(b.totalHomeInterest, 0);
   });
@@ -1140,8 +1141,8 @@ describe("cash pool", () => {
       assumptions: defaultAssumptions({ ...zeroMarket, minimumCash: 30_000 }),
     });
     const r = runScenario(h, def("o", {}));
-    // Restricted money isn't yours to spend and the buffer is yours to keep
-    // liquid — they're different rules, so they add up rather than overlap.
+    // The uninvested slice and the everyday buffer are separate floors, so
+    // they add up. Both stay in the offset.
     expect(r.years[0]!.offset).toBeCloseTo(130_000, 0);
   });
 });
@@ -1188,5 +1189,120 @@ describe("novated lease", () => {
     const payGap = b.years[1]!.afterTaxPay - a.years[1]!.afterTaxPay;
     expect(payGap).toBeGreaterThan(0);
     expect(a.netWealth - b.netWealth + payGap).toBeCloseTo(expectedGap, 0);
+  });
+});
+
+describe("savings account", () => {
+  const quiet = defaultAssumptions({
+    startDate: "2026-01-01",
+    horizonYears: 1,
+    savingsRate: 0.05,
+    inflationRate: 0,
+    incomeGrowthRate: 0,
+    superReturnRate: 0,
+    sweepIdleOffset: false,
+    monthlyExpenses: 0,
+    annualHolidaySpend: 0,
+    pooledIncome: false,
+    growthAsset: {
+      label: "flat",
+      growthRate: 0,
+      yieldRate: 0,
+      mer: 0,
+      frankingPercent: 0,
+      reinvestDividends: true,
+      distributionsPerYear: 4,
+    },
+    incomeAsset: {
+      label: "flat-inc",
+      growthRate: 0,
+      yieldRate: 0,
+      mer: 0,
+      frankingPercent: 0,
+      reinvestDividends: false,
+      distributionsPerYear: 4,
+    },
+  });
+
+  it("compounds the lump and does not pay down or offset the loan", () => {
+    const h = defaultHousehold({
+      lumpSum: 100_000,
+      you: defaultPerson("you", {
+        taxableIncome: 0,
+        salary: 0,
+        superBalance: 0,
+        marginalRate: 0,
+      }),
+      spouse: defaultPerson("spouse", {
+        taxableIncome: 0,
+        salary: 0,
+        superBalance: 0,
+        marginalRate: 0,
+      }),
+      loan: {
+        balance: 200_000,
+        offset: 0,
+        annualRate: 0,
+        remainingYears: 25,
+        interestOnly: true,
+      },
+      assumptions: quiet,
+    });
+    const s = runScenario(h, def("savings", { savings: h.lumpSum }));
+    const interest = 5_000;
+    // Below the tax-free threshold the only tax is the model's flat Medicare levy.
+    // That bill is settled out of the offset, so the account itself stays gross.
+    const tax = taxDelta(0, interest, 0.02);
+    expect(s.savings).toBeCloseTo(100_000 + interest, 0);
+    expect(s.years[0]!.savings).toBeCloseTo(100_000, 0);
+    expect(s.homeLoan).toBeCloseTo(200_000, 0);
+    expect(s.totalHomeInterest).toBeCloseTo(0, 0);
+    expect(s.totalIncomeTax).toBeCloseTo(tax, 0);
+    expect(s.offset).toBeCloseTo(-tax, 0);
+    expect(s.netWealth).toBeCloseTo(s.savings + s.offset - s.homeLoan, 0);
+  });
+
+  it("taxes interest in the lower-rate name and loses to the offset", () => {
+    const h = defaultHousehold({
+      lumpSum: 100_000,
+      you: defaultPerson("you", {
+        taxableIncome: 180_000,
+        salary: 0,
+        superBalance: 0,
+        marginalRate: 0.45,
+        medicareLevy: 0.02,
+      }),
+      spouse: defaultPerson("spouse", {
+        taxableIncome: 45_000,
+        salary: 0,
+        superBalance: 0,
+        marginalRate: 0.3,
+        medicareLevy: 0.02,
+      }),
+      loan: {
+        balance: 400_000,
+        offset: 0,
+        annualRate: 0.06,
+        remainingYears: 30,
+        interestOnly: true,
+      },
+      assumptions: defaultAssumptions({ ...quiet, savingsRate: 0.04 }),
+    });
+    const save = runScenario(h, def("sav", { savings: h.lumpSum }));
+    const park = runScenario(h, def("off", { offset: h.lumpSum }));
+    const interest = save.savings - h.lumpSum;
+    expect(interest).toBeCloseTo(4_000, 0);
+    expect(save.totalHomeInterest).toBeGreaterThan(park.totalHomeInterest);
+    expect(park.netIfLiquidated).toBeGreaterThan(save.netIfLiquidated);
+    expect(save.totalIncomeTax - park.totalIncomeTax).toBeCloseTo(
+      taxDelta(45_000, interest, 0.02),
+      0,
+    );
+    expect(save.notes.some((n) => n.includes("spouse"))).toBe(true);
+  });
+
+  it("shows up in the ranked list", () => {
+    const row = runHousehold(defaultHousehold()).results.find((r) => r.id === "savings");
+    expect(row?.appliedAllocation.savings).toBe(100_000);
   });
 });
