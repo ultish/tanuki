@@ -1244,7 +1244,7 @@ function Ledger({
 }
 
 type ChartPoint = {
-  year: number;
+  when: string;
   netWealth: number;
   superBal: number;
   investBal: number;
@@ -1304,7 +1304,7 @@ function ChartTip({
 
   return (
     <div className="chart-tip">
-      <p className="chart-tip-when">{row.year === 0 ? "Now" : `Year ${row.year}`}</p>
+      <p className="chart-tip-when">{row.when === "Now" ? "Now" : `End of ${row.when}`}</p>
       <p className="chart-tip-strategy">{strategy}</p>
       <div className="chart-tip-net">
         <span>Net wealth</span>
@@ -1358,6 +1358,57 @@ function ChartTip({
   );
 }
 
+/** Same points as the year-by-year table: today, then the last month of each calendar year. */
+function chartSnaps(result: ScenarioResult) {
+  const restricted = result.years.find((y) => y.year === 0)?.restrictedOffset ?? 0;
+  const snaps: {
+    key: string;
+    label: string;
+    netWealth: number;
+    superTotal: number;
+    taxableTotal: number;
+    offset: number;
+    cash: number;
+    savings: number;
+    homeLoan: number;
+    investmentLoan: number;
+    restrictedOffset: number;
+  }[] = [];
+  const now = result.years.find((y) => y.year === 0);
+  if (now) {
+    snaps.push({
+      key: "now",
+      label: "Now",
+      netWealth: now.netWealth,
+      superTotal: now.superTotal,
+      taxableTotal: now.taxableTotal,
+      offset: now.offset,
+      cash: now.cash,
+      savings: now.savings ?? 0,
+      homeLoan: now.homeLoan,
+      investmentLoan: now.investmentLoan,
+      restrictedOffset: now.restrictedOffset,
+    });
+  }
+  for (const [cy, ms] of groupByCalendarYear(result.months)) {
+    const last = ms[ms.length - 1]!;
+    snaps.push({
+      key: String(cy),
+      label: String(cy),
+      netWealth: last.netWealth,
+      superTotal: last.superTotal,
+      taxableTotal: last.taxableTotal,
+      offset: last.offset,
+      cash: last.cash,
+      savings: last.savings ?? 0,
+      homeLoan: last.homeLoan,
+      investmentLoan: last.investmentLoan,
+      restrictedOffset: restricted,
+    });
+  }
+  return snaps;
+}
+
 function ChartPanel({
   selected,
   baseline,
@@ -1371,36 +1422,43 @@ function ChartPanel({
 }) {
   const showOffset = baseline != null && baseline.id !== selected.id;
   const showSavings = savings != null && savings.id !== selected.id;
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [angled, setAngled] = useState(false);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const apply = () => setAngled(el.clientWidth < 560);
+    apply();
+    const obs = new ResizeObserver(apply);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
   const chart = useMemo(() => {
-    const years = selected.years;
-    const baseYears = showOffset ? (baseline?.years ?? []) : [];
-    const saveYears = showSavings ? (savings?.years ?? []) : [];
-    return years.map((y) => {
-      return {
-        year: y.year,
-        super: y.superTotal,
-        investments: y.taxableTotal,
-        offset: Math.max(0, y.offset + y.cash),
-        savings: Math.max(0, y.savings ?? 0),
-        homeLoan: -Math.max(0, y.homeLoan),
-        investmentLoan: -Math.max(0, y.investmentLoan),
-        netWealth: y.netWealth,
-        superBal: y.superTotal,
-        investBal: y.taxableTotal,
-        offsetBal: y.offset + y.cash,
-        savingsBal: y.savings ?? 0,
-        homeBal: y.homeLoan,
-        invBal: y.investmentLoan,
-        lockedBal: y.restrictedOffset,
-        offsetBaseline:
-          baseYears.find((b) => b.year === y.year)?.netWealth ?? null,
-        savingsBaseline:
-          saveYears.find((b) => b.year === y.year)?.netWealth ?? null,
-      };
-    });
+    const base = showOffset && baseline ? new Map(chartSnaps(baseline).map((s) => [s.key, s.netWealth])) : null;
+    const save = showSavings && savings ? new Map(chartSnaps(savings).map((s) => [s.key, s.netWealth])) : null;
+    return chartSnaps(selected).map((s) => ({
+      when: s.label,
+      super: s.superTotal,
+      investments: s.taxableTotal,
+      offset: Math.max(0, s.offset + s.cash),
+      savings: Math.max(0, s.savings),
+      homeLoan: -Math.max(0, s.homeLoan),
+      investmentLoan: -Math.max(0, s.investmentLoan),
+      netWealth: s.netWealth,
+      superBal: s.superTotal,
+      investBal: s.taxableTotal,
+      offsetBal: s.offset + s.cash,
+      savingsBal: s.savings,
+      homeBal: s.homeLoan,
+      invBal: s.investmentLoan,
+      lockedBal: s.restrictedOffset,
+      offsetBaseline: base?.get(s.key) ?? null,
+      savingsBaseline: save?.get(s.key) ?? null,
+    }));
   }, [selected, baseline, savings, showOffset, showSavings]);
   const hasSavings = chart.some((c) => c.savings > 0);
   const note = [
+    "Each year is the end of that calendar year, same as the year-by-year table.",
     showOffset ? "Grey dashes: the same life with the lump parked in the offset." : "",
     showSavings
       ? `Blue dashes: the same life with the lump left in a savings account at ${pct(savingsRate, 2)}, interest taxed in the lower-rate name.`
@@ -1411,11 +1469,18 @@ function ChartPanel({
 
   return (
     <>
-    <div className="chart-wrap">
+    <div className="chart-wrap" ref={wrapRef}>
       <ResponsiveContainer>
-        <AreaChart data={chart} margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
+        <AreaChart data={chart} margin={{ top: 8, right: angled ? 12 : 24, left: angled ? 16 : 8, bottom: 0 }}>
           <CartesianGrid stroke="#b7c2bc" strokeDasharray="3 6" />
-          <XAxis dataKey="year" tick={{ fill: "#5c6b66", fontSize: 12 }} />
+          <XAxis
+            dataKey="when"
+            tick={{ fill: "#5c6b66", fontSize: 11 }}
+            interval={0}
+            angle={angled ? -50 : 0}
+            textAnchor={angled ? "end" : "middle"}
+            height={angled ? 56 : 30}
+          />
           <YAxis
             tickFormatter={(v: number) =>
               v >= 1_000_000
